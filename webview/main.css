@@ -8,6 +8,10 @@
   --track-rail: 20rem;
   --transport-height: 3.5rem;
   --focus: var(--vscode-focusBorder, oklch(68% 0.14 250));
+  --playhead: var(
+    --vscode-editorCursor-foreground,
+    oklch(88% 0.015 230)
+  );
   --surface-base: var(--vscode-editor-background, oklch(18% 0.008 255));
   --surface-raised: var(
     --vscode-sideBar-background,

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5
+
+- Snap clicks inside a piano-roll note to that note's onset so the selected note is retriggered instead of skipped.
+- Add a four-millisecond engine pre-roll when seeking to a note onset.
+- Render MIDI notes as compact rounded bars with visible seams between adjacent repeated pitches.
+- Align the piano-roll palette and playhead more closely with the MIDI RealPlayer icon.
+- Change the Marketplace publisher ID to `vaclis`.
+
 ## 0.1.4
 
 - Preserve the original MIDI track name as the primary track label.

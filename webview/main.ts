@@ -6,6 +6,7 @@ import {
   findLogicalTrackSources
 } from "./midi-filter";
 import { getInstrumentThumbnailIndex } from "./instrument-thumbnails";
+import { resolvePianoRollSeek } from "./piano-roll-seek";
 import { resolvePreset } from "./preset-resolution";
 
 declare function acquireVsCodeApi(): {
@@ -48,18 +49,18 @@ let soundFontUri = body.dataset.soundFontUri ?? "";
 let soundFontLabel = body.dataset.soundFontLabel ?? "Choose SoundFont";
 
 const trackColors = [
-  "oklch(72% 0.15 250)",
-  "oklch(74% 0.16 145)",
-  "oklch(78% 0.16 85)",
-  "oklch(69% 0.17 315)",
-  "oklch(76% 0.13 210)",
-  "oklch(70% 0.18 10)",
-  "oklch(70% 0.12 175)",
-  "oklch(72% 0.17 50)",
-  "oklch(69% 0.2 25)",
-  "oklch(74% 0.15 335)",
-  "oklch(77% 0.13 110)",
-  "oklch(73% 0.12 190)"
+  "oklch(74% 0.13 205)",
+  "oklch(79% 0.14 78)",
+  "oklch(70% 0.12 18)",
+  "oklch(72% 0.11 145)",
+  "oklch(69% 0.11 255)",
+  "oklch(69% 0.11 310)",
+  "oklch(76% 0.1 190)",
+  "oklch(77% 0.12 62)",
+  "oklch(68% 0.11 28)",
+  "oklch(70% 0.1 158)",
+  "oklch(71% 0.1 270)",
+  "oklch(70% 0.1 325)"
 ];
 let parsedMidi: Midi;
 let originalMidi: BasicMIDI;
@@ -176,7 +177,7 @@ function renderApplication(): void {
         <div class="track-list" id="track-list"></div>
       </aside>
       <section class="piano-roll-region" aria-label="Piano roll">
-        <canvas id="piano-roll" tabindex="0" aria-label="Multi-track MIDI piano roll. Click to seek."></canvas>
+        <canvas id="piano-roll" tabindex="0" aria-label="Multi-track MIDI piano roll. Click a note to restart it, or click empty space to seek."></canvas>
         <div class="view-tools" aria-label="Piano roll zoom">
           <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
           <button id="fit-view" type="button" aria-label="Fit full MIDI">Fit</button>
@@ -245,13 +246,27 @@ function bindApplication(): void {
   canvas.addEventListener("pointerdown", (event) => {
     const bounds = canvas.getBoundingClientRect();
     const keyboardWidth = 48;
+    const headerHeight = 28;
     const ratio = clamp(
       (event.clientX - bounds.left - keyboardWidth) /
         Math.max(1, bounds.width - keyboardWidth),
       0,
       1
     );
-    seekTo(viewStart + ratio * (viewEnd - viewStart));
+    const clickedTime = viewStart + ratio * (viewEnd - viewStart);
+    const canvasY = event.clientY - bounds.top;
+    const gridHeight = Math.max(1, bounds.height - headerHeight);
+    const rowHeight = gridHeight / Math.max(1, maxPitch - minPitch + 1);
+    const clickedMidi =
+      event.clientX - bounds.left >= keyboardWidth && canvasY >= headerHeight
+        ? clamp(
+            maxPitch - Math.floor((canvasY - headerHeight) / rowHeight),
+            minPitch,
+            maxPitch
+          )
+        : undefined;
+    const target = resolvePianoRollSeek(tracks, clickedTime, clickedMidi);
+    seekTo(target.displayTime, target.engineTime);
   });
   canvas.addEventListener(
     "wheel",
@@ -603,10 +618,10 @@ function stop(): void {
   updatePlayButton();
 }
 
-function seekTo(time: number): void {
+function seekTo(time: number, engineTime = time): void {
   currentTime = clamp(time, 0, parsedMidi.duration);
   if (sequencer) {
-    sequencer.currentTime = currentTime;
+    sequencer.currentTime = clamp(engineTime, 0, parsedMidi.duration);
   }
   updateReadouts();
   renderCanvas();
@@ -692,6 +707,7 @@ function renderCanvas(): void {
   const muted = styles.getPropertyValue("--text-muted").trim();
   const text = styles.getPropertyValue("--text").trim();
   const focus = styles.getPropertyValue("--focus").trim();
+  const playhead = styles.getPropertyValue("--playhead").trim() || focus;
   const width = bounds.width;
   const height = bounds.height;
   const headerHeight = 28;
@@ -796,14 +812,15 @@ function renderCanvas(): void {
         headerHeight +
         (maxPitch - note.midi) * rowHeight +
         rowHeight * 0.14;
+      const noteHeight = Math.max(1.5, rowHeight * 0.72);
+      const noteInset = Math.min(0.35, noteWidth * 0.12);
+      const drawWidth = Math.max(1, noteWidth - noteInset * 2);
+      const radius = Math.min(2.5, drawWidth / 2, noteHeight / 2);
       context.fillStyle = track.color;
       context.globalAlpha = 0.42 + note.velocity * 0.58;
-      context.fillRect(
-        x,
-        y,
-        noteWidth,
-        Math.max(1.5, rowHeight * 0.72)
-      );
+      context.beginPath();
+      context.roundRect(x + noteInset, y, drawWidth, noteHeight, radius);
+      context.fill();
       context.globalAlpha = 1;
     }
   }
@@ -812,13 +829,13 @@ function renderCanvas(): void {
     keyboardWidth +
     ((currentTime - viewStart) / windowDuration) * gridWidth;
   if (playheadX >= keyboardWidth && playheadX <= width) {
-    context.strokeStyle = focus;
+    context.strokeStyle = playhead;
     context.lineWidth = 1.5;
     context.beginPath();
     context.moveTo(playheadX, 0);
     context.lineTo(playheadX, height);
     context.stroke();
-    context.fillStyle = focus;
+    context.fillStyle = playhead;
     context.beginPath();
     context.moveTo(playheadX - 5, 0);
     context.lineTo(playheadX + 5, 0);

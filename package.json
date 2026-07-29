@@ -2,8 +2,8 @@
   "name": "midi-realplayer",
   "displayName": "MIDI RealPlayer",
   "description": "A VSCode Extension for multi-track MIDI playback with SoundFont instruments, note duration, velocity, program changes, and synchronized piano-roll visualization.",
-  "version": "0.1.4",
-  "publisher": "vaclis-lab",
+  "version": "0.1.5",
+  "publisher": "vaclis",
   "license": "MIT",
   "icon": "media/icon.png",
   "repository": {
