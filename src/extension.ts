@@ -155,6 +155,13 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
         "gm-instrument-families.png"
       )
     );
+    const interfaceFont = webview.asWebviewUri(
+      vscode.Uri.joinPath(
+        this.context.extensionUri,
+        "media",
+        "JetBrainsMono-Variable.ttf"
+      )
+    );
     const worklet = webview.asWebviewUri(
       vscode.Uri.joinPath(
         this.context.extensionUri,
@@ -175,11 +182,18 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     <meta charset="UTF-8">
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; img-src ${webview.cspSource}; style-src 'nonce-${nonce}' ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval' ${webview.cspSource}; connect-src ${webview.cspSource}; worker-src blob:;"
+      content="default-src 'none'; img-src ${webview.cspSource}; font-src ${webview.cspSource}; style-src 'nonce-${nonce}' ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval' ${webview.cspSource}; connect-src ${webview.cspSource}; worker-src blob:;"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <link rel="stylesheet" href="${mainStyle}">
     <style nonce="${nonce}">
+      @font-face {
+        font-family: "JetBrains Mono";
+        font-style: normal;
+        font-weight: 400 800;
+        font-display: swap;
+        src: url("${escapeAttribute(interfaceFont.toString())}") format("truetype");
+      }
       :root { --instrument-sprite: url("${escapeAttribute(instrumentSprite.toString())}"); }
     </style>
     <title>MIDI RealPlayer</title>

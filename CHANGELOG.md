@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.6
+
+- Chase notes that are already sounding when playback starts or seeks into the middle of a sustained note.
+- Preserve chased-note channels, velocity, and original MIDI note-off timing.
+- Chase active notes again when a track is re-enabled during playback.
+- Group track and note colors by General MIDI instrument family, with related instruments sharing nearby shades.
+- Redesign the track rail with taller artwork-backed instrument cards while preserving piano-roll width.
+- Render true opaque black-and-white piano keys independently of the VS Code theme.
+- Clip sustained notes to the piano-roll viewport so they never draw over the keyboard.
+- Resolve the bundled JetBrains Mono font through an explicit VS Code webview URI.
+- Keep the zoomed piano-roll window centered on the playhead while dragging the transport scrubber.
+- Follow the playhead during playback once it reaches the piano roll's right-side safe area.
+- Add DAW-style pointer-anchored horizontal zoom with Ctrl/Cmd + wheel and timeline panning with Shift + wheel or a horizontal trackpad gesture.
+- Merge each track's artwork, source, and name into one panoramic full-bleed strip with a matching family-colored track switch.
+- Keep instrument artwork visible for named tracks even when that track currently contains no note events.
+- Use precomputed sRGB track palettes instead of runtime OKLCH mixing for consistent colors across VS Code webview versions.
+- Make the instrument artwork full-bleed against the track rail's left edge.
+- Increase pointer-centered wheel zoom sensitivity for faster navigation through long MIDI files.
+- Replace CSP-blocked inline track colors with static General MIDI family palette classes.
+- Group the track name and source at the lower-left edge instead of vertically centering the name.
+- Keep family colors focused on track switches and piano-roll notes instead of tinting the entire track strip.
+- Extend each panoramic instrument cover behind its family-colored switch so the control lives directly on the artwork.
+- Replace the low-resolution square instrument sheet with a modern high-resolution wide-banner sprite.
+- Increase pointer-centered wheel zoom sensitivity again for quicker navigation.
+- Adopt the MIDI RealPlayer brand language with JetBrains Mono, square controls, hard rules, and a Berkeley blue–gold accent palette.
+
 ## 0.1.5
 
 - Snap clicks inside a piano-roll note to that note's onset so the selected note is retriggered instead of skipped.

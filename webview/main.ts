@@ -5,9 +5,21 @@ import {
   buildFilteredMidi,
   findLogicalTrackSources
 } from "./midi-filter";
-import { getInstrumentThumbnailIndex } from "./instrument-thumbnails";
+import {
+  getInstrumentFamilyClass,
+  getInstrumentFamilyColor,
+  getInstrumentThumbnailIndex,
+  resolveInstrumentFamily
+} from "./instrument-thumbnails";
+import { getActiveNotesAtTime } from "./note-chase";
 import { resolvePianoRollSeek } from "./piano-roll-seek";
 import { resolvePreset } from "./preset-resolution";
+import {
+  centerViewWindow,
+  followPlaybackView,
+  panViewWindow,
+  zoomViewWindow
+} from "./view-window";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
@@ -48,20 +60,6 @@ const workletUri = body.dataset.workletUri ?? "";
 let soundFontUri = body.dataset.soundFontUri ?? "";
 let soundFontLabel = body.dataset.soundFontLabel ?? "Choose SoundFont";
 
-const trackColors = [
-  "oklch(74% 0.13 205)",
-  "oklch(79% 0.14 78)",
-  "oklch(70% 0.12 18)",
-  "oklch(72% 0.11 145)",
-  "oklch(69% 0.11 255)",
-  "oklch(69% 0.11 310)",
-  "oklch(76% 0.1 190)",
-  "oklch(77% 0.12 62)",
-  "oklch(68% 0.11 28)",
-  "oklch(70% 0.1 158)",
-  "oklch(71% 0.1 270)",
-  "oklch(70% 0.1 325)"
-];
 let parsedMidi: Midi;
 let originalMidi: BasicMIDI;
 let tracks: TrackModel[] = [];
@@ -76,6 +74,7 @@ let synthesizer: WorkletSynthesizer | undefined;
 let sequencer: Sequencer | undefined;
 let rebuildQueue = Promise.resolve();
 let useDirectChannelMuting = false;
+let pendingEngineTime = 0;
 let animationFrame = 0;
 let canvas: HTMLCanvasElement;
 let scrubber: HTMLInputElement;
@@ -140,6 +139,7 @@ function createTrackModels(): void {
           ? "Drums"
           : titleCase(track.instrument.name || "Acoustic Grand Piano");
       const isDrums = source.channel === 9;
+      const instrumentFamily = track.instrument.family || "music";
       return {
         sourceTrackIndex: sourceIndex,
         sourceChannel: source.channel,
@@ -147,7 +147,7 @@ function createTrackModels(): void {
         instrument,
         presetFallback: false,
         channel: source.channel,
-        instrumentFamily: track.instrument.family || "music",
+        instrumentFamily,
         isDrums,
         notes: track.notes.map((note) => ({
           midi: note.midi,
@@ -157,7 +157,7 @@ function createTrackModels(): void {
           ticks: note.ticks
         })),
         enabled: true,
-        color: trackColors[visualIndex % trackColors.length]!
+        color: getInstrumentFamilyColor(instrumentFamily, isDrums, visualIndex)
       };
     });
   const channels = tracks
@@ -226,7 +226,16 @@ function bindApplication(): void {
   requireElement<HTMLButtonElement>("#stop").addEventListener("click", stop);
   playButton.addEventListener("click", () => void togglePlayback());
   scrubber.addEventListener("input", () => {
-    seekTo(Number(scrubber.value));
+    const targetTime = Number(scrubber.value);
+    const nextView = centerViewWindow(
+      targetTime,
+      viewStart,
+      viewEnd,
+      parsedMidi.duration
+    );
+    viewStart = nextView.start;
+    viewEnd = nextView.end;
+    seekTo(targetTime);
   });
   soundFontButton.addEventListener("click", () => {
     vscode.postMessage({ type: "selectSoundFont" });
@@ -271,11 +280,45 @@ function bindApplication(): void {
   canvas.addEventListener(
     "wheel",
     (event) => {
-      if (!event.ctrlKey && !event.metaKey) {
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        const bounds = canvas.getBoundingClientRect();
+        const keyboardWidth = 48;
+        const anchorRatio = clamp(
+          (event.clientX - bounds.left - keyboardWidth) /
+            Math.max(1, bounds.width - keyboardWidth),
+          0,
+          1
+        );
+        const anchorTime =
+          viewStart + anchorRatio * (viewEnd - viewStart);
+        zoomView(
+          Math.exp(event.deltaY * 0.006),
+          anchorTime,
+          anchorRatio
+        );
+        return;
+      }
+
+      const panDelta =
+        Math.abs(event.deltaX) > 0.5
+          ? event.deltaX
+          : event.shiftKey
+            ? event.deltaY
+            : 0;
+      if (panDelta === 0) {
         return;
       }
       event.preventDefault();
-      zoomView(event.deltaY > 0 ? 1.25 : 0.8);
+      const nextView = panViewWindow(
+        (panDelta / 600) * (viewEnd - viewStart),
+        viewStart,
+        viewEnd,
+        parsedMidi.duration
+      );
+      viewStart = nextView.start;
+      viewEnd = nextView.end;
+      renderCanvas();
     },
     { passive: false }
   );
@@ -321,34 +364,53 @@ function bindApplication(): void {
 function renderTrackList(): void {
   const list = requireElement<HTMLDivElement>("#track-list");
   list.innerHTML = tracks
-    .map(
-      (track, index) => `
-        <div class="track-row" data-track="${index}" data-enabled="${track.enabled}">
-          <span class="track-number">${index + 1}</span>
+    .map((track, index) => {
+      const displayFamily = resolveInstrumentFamily(
+        track.instrumentFamily,
+        track.isDrums,
+        track.name,
+        track.notes.length > 0
+      );
+      return `
+        <div
+          class="track-row track-family-${getInstrumentFamilyClass(
+            displayFamily,
+            track.isDrums
+          )}"
+          data-track="${index}"
+          data-enabled="${track.enabled}"
+        >
           <span
-            class="track-identity${track.notes.length === 0 ? " track-identity-empty" : ""}"
-            data-family-index="${getInstrumentThumbnailIndex(
-              track.instrumentFamily,
-              track.isDrums
-            )}"
-            style="--track-color: ${track.color}"
-            aria-hidden="true"
-          ></span>
-          <span class="track-copy">
+            class="track-cover${track.notes.length === 0 ? " track-cover-empty" : ""}"
+          >
+            <span
+              class="track-cover-art"
+              data-family-index="${getInstrumentThumbnailIndex(
+                displayFamily,
+                track.isDrums
+              )}"
+              aria-hidden="true"
+            ></span>
+            <span class="track-cover-number">[${String(index + 1).padStart(2, "0")}]</span>
             <span class="track-name" title="${escapeHtml(track.name)}">${escapeHtml(track.name)}</span>
-            ${renderTrackMeta(track, index)}
+            <span class="track-copy">
+              ${renderTrackMeta(track, index)}
+            </span>
           </span>
-          <button
-            class="track-toggle"
-            type="button"
-            role="switch"
-            aria-checked="${track.enabled}"
-            aria-label="${track.enabled ? "Turn off" : "Turn on"} ${escapeHtml(track.name)}"
-            title="${track.enabled ? "Mute track" : "Enable track"}"
-          ><span class="track-toggle-knob" aria-hidden="true"></span></button>
+          <span class="track-state">
+            <span class="track-state-label" aria-hidden="true">${track.enabled ? "On" : "Off"}</span>
+            <button
+              class="track-toggle"
+              type="button"
+              role="switch"
+              aria-checked="${track.enabled}"
+              aria-label="${track.enabled ? "Turn off" : "Turn on"} ${escapeHtml(track.name)}"
+              title="${track.enabled ? "Mute track" : "Enable track"}"
+            ><span class="track-toggle-knob" aria-hidden="true"></span></button>
+          </span>
         </div>
-      `
-    )
+      `;
+    })
     .join("");
 
   list.querySelectorAll<HTMLButtonElement>(".track-toggle").forEach((button) => {
@@ -365,6 +427,9 @@ function renderTrackList(): void {
       renderCanvas();
       if (synthesizer && useDirectChannelMuting) {
         applyTrackMuteState(track);
+        if (track.enabled && sequencer && !sequencer.paused) {
+          chaseActiveNotes(sequencer.currentTime, [track]);
+        }
       } else if (sequencer) {
         queueSequenceRebuild();
       }
@@ -496,10 +561,10 @@ function renderTrackMeta(track: TrackModel, index: number): string {
         data-track-meta="${index}"
         title="${escapeHtml(warning)}"
         aria-label="${escapeHtml(warning)}"
-      >⚠ Sound: ${escapeHtml(track.instrument)} → ${escapeHtml(track.resolvedPreset)}</span>
+      >⚠ ${escapeHtml(track.instrument)} → ${escapeHtml(track.resolvedPreset)}</span>
     `;
   }
-  return `<span class="track-meta" data-track-meta="${index}">Sound: ${escapeHtml(track.instrument)}</span>`;
+  return `<span class="track-meta" data-track-meta="${index}">${escapeHtml(track.instrument)}</span>`;
 }
 
 async function rebuildSequence(resumePreviousState = true): Promise<void> {
@@ -549,9 +614,11 @@ async function rebuildSequence(resumePreviousState = true): Promise<void> {
 
   sequencer.currentTime = restoreTime;
   currentTime = restoreTime;
+  pendingEngineTime = restoreTime;
   if (wasPlaying) {
     await audioContext?.resume();
     sequencer.play();
+    chaseActiveNotes(currentTime);
   }
   updatePlayButton();
 }
@@ -602,11 +669,18 @@ async function togglePlayback(): Promise<void> {
       seekTo(0);
     }
     await audioContext.resume();
+    sequencer.currentTime = clamp(
+      pendingEngineTime,
+      0,
+      parsedMidi.duration
+    );
     sequencer.play();
+    chaseActiveNotes(currentTime);
   } else {
     currentTime = sequencer.currentTime;
     sequencer.pause();
     synthesizer?.stopAll(false);
+    pendingEngineTime = currentTime;
   }
   updatePlayButton();
 }
@@ -620,11 +694,27 @@ function stop(): void {
 
 function seekTo(time: number, engineTime = time): void {
   currentTime = clamp(time, 0, parsedMidi.duration);
+  pendingEngineTime = clamp(engineTime, 0, parsedMidi.duration);
   if (sequencer) {
-    sequencer.currentTime = clamp(engineTime, 0, parsedMidi.duration);
+    sequencer.currentTime = pendingEngineTime;
+    if (!sequencer.paused) {
+      chaseActiveNotes(currentTime);
+    }
   }
   updateReadouts();
   renderCanvas();
+}
+
+function chaseActiveNotes(
+  time: number,
+  candidateTracks: TrackModel[] = tracks
+): void {
+  if (!synthesizer) {
+    return;
+  }
+  for (const note of getActiveNotesAtTime(candidateTracks, time)) {
+    synthesizer.noteOn(note.channel, note.midi, note.velocity);
+  }
 }
 
 function updateFrame(): void {
@@ -634,6 +724,14 @@ function updateFrame(): void {
       0,
       parsedMidi.duration
     );
+    const nextView = followPlaybackView(
+      currentTime,
+      viewStart,
+      viewEnd,
+      parsedMidi.duration
+    );
+    viewStart = nextView.start;
+    viewEnd = nextView.end;
     updateReadouts();
     renderCanvas();
   }
@@ -652,16 +750,28 @@ function updateReadouts(): void {
   positionReadout.textContent = formatMusicalPosition(currentTime);
 }
 
-function zoomView(factor: number): void {
+function zoomView(
+  factor: number,
+  anchorTime = currentTime,
+  anchorRatio?: number
+): void {
   const duration = parsedMidi.duration;
   const currentWindow = viewEnd - viewStart;
-  const nextWindow = clamp(currentWindow * factor, 2, duration);
-  const center =
-    currentTime >= viewStart && currentTime <= viewEnd
-      ? currentTime
-      : (viewStart + viewEnd) / 2;
-  viewStart = clamp(center - nextWindow / 2, 0, duration - nextWindow);
-  viewEnd = viewStart + nextWindow;
+  const resolvedRatio =
+    anchorRatio ??
+    (anchorTime >= viewStart && anchorTime <= viewEnd && currentWindow > 0
+      ? (anchorTime - viewStart) / currentWindow
+      : 0.5);
+  const nextView = zoomViewWindow(
+    anchorTime,
+    resolvedRatio,
+    factor,
+    viewStart,
+    viewEnd,
+    duration
+  );
+  viewStart = nextView.start;
+  viewEnd = nextView.end;
   renderCanvas();
 }
 
@@ -708,6 +818,12 @@ function renderCanvas(): void {
   const text = styles.getPropertyValue("--text").trim();
   const focus = styles.getPropertyValue("--focus").trim();
   const playhead = styles.getPropertyValue("--playhead").trim() || focus;
+  const pianoKeyLight = styles.getPropertyValue("--piano-key-light").trim();
+  const pianoKeyDark = styles.getPropertyValue("--piano-key-dark").trim();
+  const pianoKeyBorder = styles.getPropertyValue("--piano-key-border").trim();
+  const pianoKeyLabel = styles.getPropertyValue("--piano-key-label").trim();
+  const interfaceFont =
+    styles.getPropertyValue("--interface-font").trim() || "monospace";
   const width = bounds.width;
   const height = bounds.height;
   const headerHeight = 28;
@@ -728,14 +844,14 @@ function renderCanvas(): void {
     const y = headerHeight + (maxPitch - pitch) * rowHeight;
     const pitchClass = pitch % 12;
     const black = [1, 3, 6, 8, 10].includes(pitchClass);
+    context.fillStyle = pianoKeyLight;
+    context.fillRect(0, y, keyboardWidth, Math.max(1, rowHeight - 0.5));
     if (black) {
-      context.fillStyle = "color-mix(in oklch, " + raised + ", " + background + " 45%)";
+      context.fillStyle =
+        "color-mix(in oklch, " + raised + ", " + background + " 45%)";
       context.fillRect(keyboardWidth, y, gridWidth, rowHeight);
-      context.fillStyle = "color-mix(in oklch, " + text + ", " + background + " 72%)";
+      context.fillStyle = pianoKeyDark;
       context.fillRect(0, y, keyboardWidth * 0.62, Math.max(1, rowHeight - 0.5));
-    } else {
-      context.fillStyle = "color-mix(in oklch, " + text + ", " + background + " 88%)";
-      context.fillRect(0, y, keyboardWidth, Math.max(1, rowHeight - 0.5));
     }
     context.strokeStyle = border;
     context.globalAlpha = 0.24;
@@ -745,12 +861,18 @@ function renderCanvas(): void {
     context.stroke();
     context.globalAlpha = 1;
     if (pitchClass === 0 && rowHeight >= 5) {
-      context.fillStyle = muted;
-      context.font = "10px var(--vscode-font-family, system-ui)";
+      context.fillStyle = pianoKeyLabel;
+      context.font = `10px ${interfaceFont}`;
       context.textBaseline = "middle";
       context.fillText(`C${Math.floor(pitch / 12) - 1}`, 4, y + rowHeight / 2);
     }
   }
+  context.strokeStyle = pianoKeyBorder;
+  context.globalAlpha = 1;
+  context.beginPath();
+  context.moveTo(keyboardWidth - 0.5, headerHeight);
+  context.lineTo(keyboardWidth - 0.5, height);
+  context.stroke();
 
   const quarter = parsedMidi.header.ppq;
   const startTick = Math.max(
@@ -758,7 +880,7 @@ function renderCanvas(): void {
     Math.floor(parsedMidi.header.secondsToTicks(viewStart) / quarter) * quarter
   );
   const endTick = parsedMidi.header.secondsToTicks(viewEnd) + quarter;
-  context.font = "10px var(--vscode-font-family, system-ui)";
+  context.font = `10px ${interfaceFont}`;
   context.textBaseline = "middle";
   let lastMinorGridX = -Infinity;
   let lastMeasureLabelX = -Infinity;
@@ -792,6 +914,11 @@ function renderCanvas(): void {
     }
   }
 
+  context.save();
+  context.beginPath();
+  context.rect(keyboardWidth, headerHeight, gridWidth, gridHeight);
+  context.clip();
+
   for (const track of tracks) {
     if (!track.enabled) {
       continue;
@@ -824,6 +951,7 @@ function renderCanvas(): void {
       context.globalAlpha = 1;
     }
   }
+  context.restore();
 
   const playheadX =
     keyboardWidth +

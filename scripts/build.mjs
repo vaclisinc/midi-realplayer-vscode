@@ -53,7 +53,7 @@ const soundFontLicenseTarget = resolve(
 );
 const instrumentSpriteSource = resolve(
   root,
-  "assets/instruments/gm-families.png"
+  "assets/instruments/gm-families-wide.png"
 );
 const instrumentSpriteTarget = resolve(
   root,
@@ -64,6 +64,22 @@ const extensionIconSource = resolve(
   "assets/instruments/extension-icon.png"
 );
 const extensionIconTarget = resolve(root, "media/icon.png");
+const interfaceFontSource = resolve(
+  root,
+  "assets/fonts/JetBrainsMono-Variable.ttf"
+);
+const interfaceFontTarget = resolve(
+  root,
+  "media/JetBrainsMono-Variable.ttf"
+);
+const interfaceFontLicenseSource = resolve(
+  root,
+  "assets/fonts/JetBrainsMono-OFL.txt"
+);
+const interfaceFontLicenseTarget = resolve(
+  root,
+  "media/JetBrainsMono-OFL.txt"
+);
 
 if (watch) {
   const contexts = await Promise.all(builds.map((options) => context(options)));
@@ -74,7 +90,9 @@ if (watch) {
     cp(soundFontSource, soundFontTarget),
     cp(soundFontLicenseSource, soundFontLicenseTarget),
     cp(instrumentSpriteSource, instrumentSpriteTarget),
-    cp(extensionIconSource, extensionIconTarget)
+    cp(extensionIconSource, extensionIconTarget),
+    cp(interfaceFontSource, interfaceFontTarget),
+    cp(interfaceFontLicenseSource, interfaceFontLicenseTarget)
   ]);
   console.log("Watching extension and webview sources.");
 } else {
@@ -85,7 +103,9 @@ if (watch) {
     cp(soundFontSource, soundFontTarget),
     cp(soundFontLicenseSource, soundFontLicenseTarget),
     cp(instrumentSpriteSource, instrumentSpriteTarget),
-    cp(extensionIconSource, extensionIconTarget)
+    cp(extensionIconSource, extensionIconTarget),
+    cp(interfaceFontSource, interfaceFontTarget),
+    cp(interfaceFontLicenseSource, interfaceFontLicenseTarget)
   ]);
   console.log("Built extension and webview.");
 }
