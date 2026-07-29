@@ -1,10 +1,19 @@
 {
-  "name": "midi-instrument-viewer",
-  "displayName": "MIDI Instrument Viewer",
-  "description": "Inspect and faithfully play multi-track MIDI files inside VS Code.",
-  "version": "0.1.3",
+  "name": "midi-realplayer",
+  "displayName": "MIDI RealPlayer",
+  "description": "A VSCode Extension for multi-track MIDI playback with SoundFont instruments, note duration, velocity, program changes, and synchronized piano-roll visualization.",
+  "version": "0.1.4",
   "publisher": "vaclis-lab",
   "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vaclisinc/midi-realplayer-vscode.git"
+  },
+  "homepage": "https://github.com/vaclisinc/midi-realplayer-vscode#readme",
+  "bugs": {
+    "url": "https://github.com/vaclisinc/midi-realplayer-vscode/issues"
+  },
   "engines": {
     "vscode": "^1.100.0"
   },
@@ -20,14 +29,14 @@
     "transcription"
   ],
   "activationEvents": [
-    "onCustomEditor:midiInstrument.viewer"
+    "onCustomEditor:midiRealPlayer.viewer"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "customEditors": [
       {
-        "viewType": "midiInstrument.viewer",
-        "displayName": "MIDI Instrument Viewer",
+        "viewType": "midiRealPlayer.viewer",
+        "displayName": "MIDI RealPlayer",
         "selector": [
           {
             "filenamePattern": "*.mid"
@@ -41,14 +50,14 @@
     ],
     "commands": [
       {
-        "command": "midiInstrument.selectSoundFont",
+        "command": "midiRealPlayer.selectSoundFont",
         "title": "MIDI: Select SoundFont"
       }
     ],
     "configuration": {
-      "title": "MIDI Instrument Viewer",
+      "title": "MIDI RealPlayer",
       "properties": {
-        "midiInstrument.soundFontPath": {
+        "midiRealPlayer.soundFontPath": {
           "type": "string",
           "default": "",
           "description": "Optional path to an SF2, SF3, or DLS sound bank. Leave empty to use the bundled GeneralUser GS bank."

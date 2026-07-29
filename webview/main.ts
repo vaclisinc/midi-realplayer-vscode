@@ -5,6 +5,8 @@ import {
   buildFilteredMidi,
   findLogicalTrackSources
 } from "./midi-filter";
+import { getInstrumentThumbnailIndex } from "./instrument-thumbnails";
+import { resolvePreset } from "./preset-resolution";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
@@ -17,7 +19,11 @@ type TrackModel = {
   sourceChannel?: number;
   name: string;
   instrument: string;
+  resolvedPreset?: string;
+  presetFallback: boolean;
   channel?: number;
+  instrumentFamily: string;
+  isDrums: boolean;
   notes: Array<{
     midi: number;
     time: number;
@@ -27,7 +33,6 @@ type TrackModel = {
   }>;
   enabled: boolean;
   color: string;
-  marker: string;
 };
 
 type SoundFontState = "missing" | "loading" | "ready" | "error";
@@ -56,8 +61,6 @@ const trackColors = [
   "oklch(77% 0.13 110)",
   "oklch(73% 0.12 190)"
 ];
-const markers = ["circle", "square", "triangle", "diamond", "ring", "stripes", "dots"];
-
 let parsedMidi: Midi;
 let originalMidi: BasicMIDI;
 let tracks: TrackModel[] = [];
@@ -135,12 +138,16 @@ function createTrackModels(): void {
           : track.channel === 9
           ? "Drums"
           : titleCase(track.instrument.name || "Acoustic Grand Piano");
+      const isDrums = source.channel === 9;
       return {
         sourceTrackIndex: sourceIndex,
         sourceChannel: source.channel,
-        name: track.name.trim() || instrument,
+        name: track.name.trim() || `Untitled Track ${visualIndex + 1}`,
         instrument,
+        presetFallback: false,
         channel: source.channel,
+        instrumentFamily: track.instrument.family || "music",
+        isDrums,
         notes: track.notes.map((note) => ({
           midi: note.midi,
           time: note.time,
@@ -149,8 +156,7 @@ function createTrackModels(): void {
           ticks: note.ticks
         })),
         enabled: true,
-        color: trackColors[visualIndex % trackColors.length]!,
-        marker: markers[visualIndex % markers.length]!
+        color: trackColors[visualIndex % trackColors.length]!
       };
     });
   const channels = tracks
@@ -179,9 +185,9 @@ function renderApplication(): void {
       </section>
       <footer class="transport" aria-label="MIDI transport">
         <div class="transport-buttons">
-          <button class="transport-button" id="go-start" type="button" aria-label="Go to start">↤</button>
-          <button class="transport-button primary" id="play-pause" type="button" aria-label="Play">▶</button>
-          <button class="transport-button" id="stop" type="button" aria-label="Stop">■</button>
+          <button class="transport-button" id="go-start" type="button" aria-label="Go to start" title="Go to start">↤</button>
+          <button class="transport-button primary" id="play-pause" type="button" aria-label="Play" title="Play or pause (Space)">▶</button>
+          <button class="transport-button" id="stop" type="button" aria-label="Stop" title="Stop">■</button>
         </div>
         <div class="time-group" aria-live="off">
           <span class="time-readout" id="time-readout">00:00.000</span>
@@ -190,6 +196,7 @@ function renderApplication(): void {
         <input class="scrubber" id="scrubber" type="range" min="0" max="${parsedMidi.duration}" value="0" step="0.001" aria-label="Playback position">
         <button class="soundfont-button" id="soundfont-button" type="button" data-state="missing" aria-label="Choose SoundFont">
           <span class="soundfont-dot" aria-hidden="true"></span>
+          <span class="soundfont-type" aria-hidden="true">SF</span>
           <span class="soundfont-label" id="soundfont-label">${escapeHtml(soundFontLabel)}</span>
         </button>
       </footer>
@@ -304,26 +311,17 @@ function renderTrackList(): void {
         <div class="track-row" data-track="${index}" data-enabled="${track.enabled}">
           <span class="track-number">${index + 1}</span>
           <span
-            class="track-identity"
-            data-marker="${track.marker}"
+            class="track-identity${track.notes.length === 0 ? " track-identity-empty" : ""}"
+            data-family-index="${getInstrumentThumbnailIndex(
+              track.instrumentFamily,
+              track.isDrums
+            )}"
             style="--track-color: ${track.color}"
             aria-hidden="true"
           ></span>
           <span class="track-copy">
             <span class="track-name" title="${escapeHtml(track.name)}">${escapeHtml(track.name)}</span>
-            <span class="track-meta">
-              ${
-                track.name.localeCompare(track.instrument, undefined, {
-                  sensitivity: "base"
-                }) === 0
-                  ? track.channel === undefined
-                    ? escapeHtml(track.instrument)
-                    : `Channel ${track.channel + 1}`
-                  : track.channel === undefined
-                    ? escapeHtml(track.instrument)
-                    : `${escapeHtml(track.instrument)} · Channel ${track.channel + 1}`
-              }
-            </span>
+            ${renderTrackMeta(track, index)}
           </span>
           <button
             class="track-toggle"
@@ -331,7 +329,8 @@ function renderTrackList(): void {
             role="switch"
             aria-checked="${track.enabled}"
             aria-label="${track.enabled ? "Turn off" : "Turn on"} ${escapeHtml(track.name)}"
-          >${track.enabled ? "On" : "Off"}</button>
+            title="${track.enabled ? "Mute track" : "Enable track"}"
+          ><span class="track-toggle-knob" aria-hidden="true"></span></button>
         </div>
       `
     )
@@ -395,7 +394,15 @@ async function loadSoundFont(uri: string, label: string): Promise<void> {
         `This MIDI could not be played: ${error.message || "the sequence is not supported."}`
       );
     });
+    synthesizer.eventHandler.addEvent(
+      "programChange",
+      "viewer-program-change",
+      ({ channel }) => {
+        refreshResolvedPreset(channel);
+      }
+    );
     await rebuildSequence(false);
+    refreshResolvedPresets();
     applyAllTrackMuteStates();
     setSoundFontState("ready", `${label} is ready.`);
     window.setTimeout(hideStatus, 1800);
@@ -404,6 +411,80 @@ async function loadSoundFont(uri: string, label: string): Promise<void> {
       error instanceof Error ? error.message : "The SoundFont could not be loaded.";
     setSoundFontState("error", `${message} Choose another SF2, SF3, or DLS file.`);
   }
+}
+
+function refreshResolvedPresets(): void {
+  const channels = new Set(
+    tracks
+      .map((track) => track.sourceChannel)
+      .filter((channel): channel is number => channel !== undefined)
+  );
+  for (const channel of channels) {
+    refreshResolvedPreset(channel, false);
+  }
+  updateTrackMetaElements();
+}
+
+function refreshResolvedPreset(
+  channel: number,
+  render = true
+): void {
+  if (!synthesizer) {
+    return;
+  }
+  const requested = synthesizer.midiChannels[channel]?.patch;
+  if (!requested) {
+    return;
+  }
+  const resolution = resolvePreset(
+    synthesizer.presetList,
+    requested,
+    synthesizer.midiParameters.system
+  );
+  for (const track of tracks) {
+    if (track.sourceChannel !== channel) {
+      continue;
+    }
+    track.resolvedPreset = resolution?.name;
+    track.presetFallback = resolution?.fallback ?? false;
+  }
+  if (render) {
+    updateTrackMetaElements(channel);
+  }
+}
+
+function updateTrackMetaElements(channel?: number): void {
+  tracks.forEach((track, index) => {
+    if (channel !== undefined && track.sourceChannel !== channel) {
+      return;
+    }
+    const current = document.querySelector<HTMLElement>(
+      `[data-track-meta="${index}"]`
+    );
+    if (current) {
+      current.outerHTML = renderTrackMeta(track, index);
+    }
+  });
+}
+
+function renderTrackMeta(track: TrackModel, index: number): string {
+  if (track.channel === undefined) {
+    return `<span class="track-meta" data-track-meta="${index}">No notes</span>`;
+  }
+  if (track.presetFallback && track.resolvedPreset) {
+    const warning =
+      `MIDI requested ${track.instrument}, but the SoundFont is playing ` +
+      `${track.resolvedPreset}.`;
+    return `
+      <span
+        class="track-meta track-meta-warning"
+        data-track-meta="${index}"
+        title="${escapeHtml(warning)}"
+        aria-label="${escapeHtml(warning)}"
+      >⚠ Sound: ${escapeHtml(track.instrument)} → ${escapeHtml(track.resolvedPreset)}</span>
+    `;
+  }
+  return `<span class="track-meta" data-track-meta="${index}">Sound: ${escapeHtml(track.instrument)}</span>`;
 }
 
 async function rebuildSequence(resumePreviousState = true): Promise<void> {
@@ -663,6 +744,8 @@ function renderCanvas(): void {
   const endTick = parsedMidi.header.secondsToTicks(viewEnd) + quarter;
   context.font = "10px var(--vscode-font-family, system-ui)";
   context.textBaseline = "middle";
+  let lastMinorGridX = -Infinity;
+  let lastMeasureLabelX = -Infinity;
 
   for (let tick = startTick; tick <= endTick; tick += quarter) {
     const seconds = parsedMidi.header.ticksToSeconds(tick);
@@ -674,17 +757,22 @@ function renderCanvas(): void {
     }
     const measures = parsedMidi.header.ticksToMeasures(tick);
     const isMeasure = Math.abs(measures - Math.round(measures)) < 0.001;
+    if (!isMeasure && x - lastMinorGridX < 4) {
+      continue;
+    }
+    lastMinorGridX = x;
     context.strokeStyle = border;
-    context.globalAlpha = isMeasure ? 0.7 : 0.28;
+    context.globalAlpha = isMeasure ? 0.5 : 0.16;
     context.lineWidth = isMeasure ? 1 : 0.5;
     context.beginPath();
     context.moveTo(x, isMeasure ? 0 : headerHeight);
     context.lineTo(x, height);
     context.stroke();
     context.globalAlpha = 1;
-    if (isMeasure) {
+    if (isMeasure && x - lastMeasureLabelX >= 28) {
       context.fillStyle = muted;
       context.fillText(String(Math.round(measures) + 1), x + 5, headerHeight / 2);
+      lastMeasureLabelX = x;
     }
   }
 

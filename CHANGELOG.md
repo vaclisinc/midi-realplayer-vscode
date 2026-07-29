@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4
+
+- Preserve the original MIDI track name as the primary track label.
+- Use numbered `Untitled Track` labels only when the source name is empty.
+- Show the MIDI-requested sound without exposing low-level channel numbers.
+- Show an explicit `requested → playing` warning only when the SoundFont falls back to another preset.
+- Replace abstract track markers with bundled, original thumbnails for all 16 General MIDI instrument families.
+- Refine the viewer into a quieter workstation layout with compact track switches, a unified transport strip, and legible timeline labels at full-song zoom.
+
 ## 0.1.3
 
 - Correctly expose multiple MIDI channels stored inside one physical track.

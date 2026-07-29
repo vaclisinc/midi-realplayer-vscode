@@ -1,10 +1,12 @@
-# MIDI Instrument Viewer
+# MIDI RealPlayer
+
+A VSCode Extension for multi-track MIDI playback with SoundFont instruments, note duration, velocity, program changes, and synchronized piano-roll visualization.
 
 Open multi-track `.mid` and `.midi` files directly in VS Code, inspect them as a unified piano roll, and play them with a real SoundFont instrument bank.
 
 ## Why this exists
 
-Many MIDI preview extensions render useful piano rolls but reduce playback to short, identical note onsets. MIDI Instrument Viewer keeps the visualization and the audio engine in agreement:
+Many MIDI preview extensions render useful piano rolls but reduce playback to short, identical note onsets. MIDI RealPlayer keeps the visualization and the audio engine in agreement:
 
 - Note-on and note-off timing determine the audible note length.
 - Velocity is preserved.
@@ -24,7 +26,7 @@ first-run download or file selection is required.
 
 Select the SoundFont name in the bottom-right corner to override the built-in
 bank with a local `.sf2`, `.sf3`, or `.dls` file. The selected path is remembered
-in the VS Code setting `midiInstrument.soundFontPath`. Clear that setting to
+in the VS Code setting `midiRealPlayer.soundFontPath`. Clear that setting to
 return to the bundled bank.
 
 ## Controls
@@ -73,4 +75,3 @@ included in the extension package as `media/GeneralUser-GS-LICENSE.txt`.
 - Sound quality and instrument coverage depend on the selected SoundFont.
 - Controller-only tracks are not shown as rows, although their metadata remains in the MIDI sequence.
 - Rapid track changes are applied to playback sequentially to avoid corrupting the active sequencer state.
-- The Marketplace publisher ID in `package.json` must be changed to the publisher account used for release.

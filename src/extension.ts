@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-const VIEW_TYPE = "midiInstrument.viewer";
+const VIEW_TYPE = "midiRealPlayer.viewer";
 const SOUND_FONT_SETTING = "soundFontPath";
 const BUNDLED_SOUND_FONT = "GeneralUser-GS.sf2";
 
@@ -89,7 +89,7 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     }
 
     await vscode.workspace
-      .getConfiguration("midiInstrument")
+      .getConfiguration("midiRealPlayer")
       .update(
         SOUND_FONT_SETTING,
         soundFontUri.fsPath,
@@ -109,7 +109,7 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
 
   private getConfiguredSoundFont(): vscode.Uri | undefined {
     const configured = vscode.workspace
-      .getConfiguration("midiInstrument")
+      .getConfiguration("midiRealPlayer")
       .get<string>(SOUND_FONT_SETTING, "")
       .trim();
     return configured ? vscode.Uri.file(configured) : undefined;
@@ -148,6 +148,13 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     const mainStyle = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, "media", "main.css")
     );
+    const instrumentSprite = webview.asWebviewUri(
+      vscode.Uri.joinPath(
+        this.context.extensionUri,
+        "media",
+        "gm-instrument-families.png"
+      )
+    );
     const worklet = webview.asWebviewUri(
       vscode.Uri.joinPath(
         this.context.extensionUri,
@@ -168,11 +175,14 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     <meta charset="UTF-8">
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval' ${webview.cspSource}; connect-src ${webview.cspSource}; worker-src blob:;"
+      content="default-src 'none'; img-src ${webview.cspSource}; style-src 'nonce-${nonce}' ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval' ${webview.cspSource}; connect-src ${webview.cspSource}; worker-src blob:;"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <link rel="stylesheet" href="${mainStyle}">
-    <title>MIDI Instrument Viewer</title>
+    <style nonce="${nonce}">
+      :root { --instrument-sprite: url("${escapeAttribute(instrumentSprite.toString())}"); }
+    </style>
+    <title>MIDI RealPlayer</title>
   </head>
   <body
     data-midi-uri="${escapeAttribute(midiUri.toString())}"
@@ -206,7 +216,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand(
-      "midiInstrument.selectSoundFont",
+      "midiRealPlayer.selectSoundFont",
       () => provider.selectSoundFontFromCommand()
     )
   );

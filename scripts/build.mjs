@@ -51,6 +51,19 @@ const soundFontLicenseTarget = resolve(
   root,
   "media/GeneralUser-GS-LICENSE.txt"
 );
+const instrumentSpriteSource = resolve(
+  root,
+  "assets/instruments/gm-families.png"
+);
+const instrumentSpriteTarget = resolve(
+  root,
+  "media/gm-instrument-families.png"
+);
+const extensionIconSource = resolve(
+  root,
+  "assets/instruments/extension-icon.png"
+);
+const extensionIconTarget = resolve(root, "media/icon.png");
 
 if (watch) {
   const contexts = await Promise.all(builds.map((options) => context(options)));
@@ -59,7 +72,9 @@ if (watch) {
     cp(workletSource, workletTarget),
     cp(styleSource, styleTarget),
     cp(soundFontSource, soundFontTarget),
-    cp(soundFontLicenseSource, soundFontLicenseTarget)
+    cp(soundFontLicenseSource, soundFontLicenseTarget),
+    cp(instrumentSpriteSource, instrumentSpriteTarget),
+    cp(extensionIconSource, extensionIconTarget)
   ]);
   console.log("Watching extension and webview sources.");
 } else {
@@ -68,7 +83,9 @@ if (watch) {
     cp(workletSource, workletTarget),
     cp(styleSource, styleTarget),
     cp(soundFontSource, soundFontTarget),
-    cp(soundFontLicenseSource, soundFontLicenseTarget)
+    cp(soundFontLicenseSource, soundFontLicenseTarget),
+    cp(instrumentSpriteSource, instrumentSpriteTarget),
+    cp(extensionIconSource, extensionIconTarget)
   ]);
   console.log("Built extension and webview.");
 }
