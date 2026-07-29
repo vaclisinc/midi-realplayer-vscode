@@ -1,0 +1,7 @@
+node_modules/
+dist/
+media/
+work/
+*.vsix
+.DS_Store
+.impeccable/

@@ -1,0 +1,537 @@
+:root {
+  color-scheme: light dark;
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+  --space-xl: 1.5rem;
+  --track-rail: 18rem;
+  --transport-height: 4rem;
+  --focus: var(--vscode-focusBorder, oklch(68% 0.14 250));
+  --surface-base: var(--vscode-editor-background, oklch(18% 0.008 255));
+  --surface-raised: var(
+    --vscode-sideBar-background,
+    oklch(21% 0.009 255)
+  );
+  --surface-control: var(
+    --vscode-input-background,
+    oklch(25% 0.01 255)
+  );
+  --border: var(
+    --vscode-panel-border,
+    var(--vscode-widget-border, oklch(39% 0.012 255))
+  );
+  --text: var(--vscode-foreground, oklch(88% 0.006 255));
+  --text-muted: var(
+    --vscode-descriptionForeground,
+    oklch(68% 0.008 255)
+  );
+  --accent: var(
+    --vscode-button-background,
+    oklch(60% 0.14 250)
+  );
+  --accent-text: var(
+    --vscode-button-foreground,
+    oklch(97% 0.006 255)
+  );
+  font-family: var(
+    --vscode-font-family,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    system-ui,
+    sans-serif
+  );
+  font-size: var(--vscode-font-size, 13px);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  color: var(--text);
+  background: var(--surface-base);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.loading-screen,
+.error-screen,
+.empty-screen {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  grid-template-columns: auto minmax(14rem, 28rem);
+  gap: var(--space-lg);
+  padding: var(--space-xl);
+  color: var(--text-muted);
+}
+
+.loading-screen strong,
+.error-screen strong,
+.empty-screen strong {
+  display: block;
+  margin-bottom: var(--space-xs);
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.loading-screen span,
+.error-screen span,
+.empty-screen span {
+  display: block;
+  line-height: 1.5;
+}
+
+.loading-mark {
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.app-shell {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template:
+    "tracks roll" minmax(0, 1fr)
+    "transport transport" var(--transport-height)
+    / var(--track-rail) minmax(0, 1fr);
+}
+
+.track-rail {
+  grid-area: tracks;
+  display: grid;
+  grid-template-rows: 3rem minmax(0, 1fr);
+  min-width: 0;
+  background: var(--surface-raised);
+  border-right: 1px solid var(--border);
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-md) 0 var(--space-lg);
+  border-bottom: 1px solid var(--border);
+}
+
+.section-heading h1 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.track-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.track-list {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: var(--border) transparent;
+}
+
+.track-row {
+  min-height: 3.5rem;
+  display: grid;
+  grid-template-columns: 1.25rem 1rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid color-mix(in oklch, var(--border), transparent 45%);
+}
+
+.track-row[data-enabled="false"] {
+  color: var(--text-muted);
+  background: color-mix(in oklch, var(--surface-base), transparent 45%);
+}
+
+.track-number,
+.track-channel,
+.time-readout,
+.position-readout {
+  font-variant-numeric: tabular-nums;
+}
+
+.track-number {
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.track-identity {
+  width: 0.75rem;
+  height: 0.75rem;
+  justify-self: center;
+  background: var(--track-color);
+}
+
+.track-identity[data-marker="circle"] {
+  border-radius: 50%;
+}
+
+.track-identity[data-marker="triangle"] {
+  width: 0;
+  height: 0;
+  background: transparent;
+  border-right: 0.42rem solid transparent;
+  border-bottom: 0.78rem solid var(--track-color);
+  border-left: 0.42rem solid transparent;
+}
+
+.track-identity[data-marker="diamond"] {
+  transform: rotate(45deg) scale(0.8);
+}
+
+.track-identity[data-marker="ring"] {
+  border: 3px solid var(--track-color);
+  border-radius: 50%;
+  background: transparent;
+}
+
+.track-identity[data-marker="stripes"] {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--track-color) 0 2px,
+    transparent 2px 4px
+  );
+}
+
+.track-identity[data-marker="dots"] {
+  background:
+    radial-gradient(var(--track-color) 1.5px, transparent 2px) 0 0 / 5px 5px;
+}
+
+.track-copy {
+  min-width: 0;
+}
+
+.track-name,
+.track-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.track-meta {
+  margin-top: 0.125rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.track-toggle {
+  min-width: 2.75rem;
+  min-height: 2rem;
+  padding: 0 var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--surface-control);
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.track-toggle[aria-checked="true"] {
+  color: var(--accent-text);
+  border-color: transparent;
+  background: var(--accent);
+}
+
+.piano-roll-region {
+  position: relative;
+  grid-area: roll;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-base);
+}
+
+#piano-roll {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: crosshair;
+}
+
+.view-tools {
+  position: absolute;
+  top: var(--space-sm);
+  right: var(--space-sm);
+  display: flex;
+  gap: 1px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--surface-raised);
+}
+
+.view-tools button {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.view-tools button:hover {
+  background: var(--surface-control);
+}
+
+.transport {
+  grid-area: transport;
+  display: grid;
+  grid-template-columns: auto auto minmax(9rem, 1fr) auto;
+  align-items: center;
+  gap: var(--space-lg);
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--surface-raised);
+  border-top: 1px solid var(--border);
+}
+
+.transport-buttons,
+.time-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.transport-button {
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--surface-control);
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.transport-button.primary {
+  color: var(--accent-text);
+  border-color: transparent;
+  background: var(--accent);
+}
+
+.transport-button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.transport-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.transport-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.time-group {
+  min-width: 11rem;
+}
+
+.time-readout {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.position-readout {
+  padding-left: var(--space-md);
+  border-left: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.scrubber {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.soundfont-button {
+  max-width: 14rem;
+  height: 2.75rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 0 var(--space-md);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--surface-control);
+  cursor: pointer;
+}
+
+.soundfont-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.soundfont-button[data-state="ready"] .soundfont-dot {
+  background: var(--vscode-testing-iconPassed, oklch(72% 0.13 155));
+}
+
+.soundfont-button[data-state="loading"] .soundfont-dot {
+  background: var(--vscode-editorWarning-foreground, oklch(76% 0.13 80));
+}
+
+.soundfont-button[data-state="error"] .soundfont-dot {
+  background: var(--vscode-errorForeground, oklch(65% 0.2 25));
+}
+
+.soundfont-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-toast {
+  position: absolute;
+  right: var(--space-md);
+  bottom: calc(var(--transport-height) + var(--space-md));
+  max-width: min(28rem, calc(100% - 2rem));
+  padding: var(--space-md) var(--space-lg);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: 0 0.5rem 1.5rem color-mix(in oklch, var(--surface-base), transparent 35%);
+}
+
+.status-toast[hidden] {
+  display: none;
+}
+
+@media (max-width: 52rem) {
+  :root {
+    --track-rail: 14rem;
+  }
+
+  .track-row {
+    grid-template-columns: 0.8rem minmax(0, 1fr) auto;
+    padding-inline: var(--space-sm);
+  }
+
+  .track-number {
+    display: none;
+  }
+
+  .position-readout {
+    display: none;
+  }
+
+  .transport {
+    grid-template-columns: auto auto minmax(5rem, 1fr) auto;
+    gap: var(--space-sm);
+    padding-inline: var(--space-sm);
+  }
+
+  .soundfont-button {
+    width: 2.25rem;
+    height: 2rem;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .soundfont-label {
+    display: none;
+  }
+}
+
+@media (max-width: 38rem) {
+  :root {
+    --track-rail: 4rem;
+  }
+
+  .section-heading {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .section-heading h1,
+  .track-copy {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .track-row {
+    grid-template-columns: 0.8rem auto;
+    justify-content: center;
+    padding-inline: var(--space-xs);
+  }
+
+  .track-toggle {
+    min-width: 2rem;
+    width: 2rem;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .track-toggle::after {
+    content: "×";
+    font-size: 0.75rem;
+  }
+
+  .track-toggle[aria-checked="true"]::after {
+    content: "✓";
+  }
+
+  .time-group {
+    display: none;
+  }
+
+  .transport {
+    grid-template-columns: auto minmax(4rem, 1fr) auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-mark {
+    animation: none;
+  }
+}

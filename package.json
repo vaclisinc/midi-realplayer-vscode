@@ -1,0 +1,79 @@
+{
+  "name": "midi-instrument-viewer",
+  "displayName": "MIDI Instrument Viewer",
+  "description": "Inspect and faithfully play multi-track MIDI files inside VS Code.",
+  "version": "0.1.3",
+  "publisher": "vaclis-lab",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "midi",
+    "piano roll",
+    "soundfont",
+    "music",
+    "transcription"
+  ],
+  "activationEvents": [
+    "onCustomEditor:midiInstrument.viewer"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "midiInstrument.viewer",
+        "displayName": "MIDI Instrument Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.mid"
+          },
+          {
+            "filenamePattern": "*.midi"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "midiInstrument.selectSoundFont",
+        "title": "MIDI: Select SoundFont"
+      }
+    ],
+    "configuration": {
+      "title": "MIDI Instrument Viewer",
+      "properties": {
+        "midiInstrument.soundFontPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to an SF2, SF3, or DLS sound bank. Leave empty to use the bundled GeneralUser GS bank."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "package": "npm run build && vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@tonejs/midi": "^2.0.28",
+    "spessasynth_core": "^4.3.15",
+    "spessasynth_lib": "^4.3.11"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.25.5",
+    "typescript": "^5.8.3"
+  }
+}
