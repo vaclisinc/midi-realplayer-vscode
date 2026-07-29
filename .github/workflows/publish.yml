@@ -48,17 +48,47 @@ jobs:
       - name: Package VSIX
         run: npx vsce package --no-dependencies --out "midi-realplayer-${PACKAGE_VERSION}.vsix"
 
+      - name: Check Marketplace version
+        id: marketplace
+        shell: bash
+        run: |
+          MARKETPLACE_VERSION="$(
+            npx vsce show vaclis.midi-realplayer --json |
+              node -e "
+                let input = '';
+                process.stdin.on('data', chunk => input += chunk);
+                process.stdin.on('end', () => {
+                  const extension = JSON.parse(input);
+                  process.stdout.write(extension.versions?.[0]?.version ?? '');
+                });
+              "
+          )"
+          if [[ "${MARKETPLACE_VERSION}" == "${PACKAGE_VERSION}" ]]; then
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+            echo "Marketplace ${PACKAGE_VERSION} already exists; skipping publish."
+          else
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Publish to VS Code Marketplace
+        if: steps.marketplace.outputs.publish == 'true'
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: npx vsce publish --no-dependencies
 
-      - name: Create GitHub release
+      - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release create "${GITHUB_REF_NAME}"
-          "midi-realplayer-${PACKAGE_VERSION}.vsix"
-          --verify-tag
-          --generate-notes
-          --title "MIDI RealPlayer ${PACKAGE_VERSION}"
+        shell: bash
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" \
+              "midi-realplayer-${PACKAGE_VERSION}.vsix" \
+              --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              "midi-realplayer-${PACKAGE_VERSION}.vsix" \
+              --verify-tag \
+              --generate-notes \
+              --title "MIDI RealPlayer ${PACKAGE_VERSION}"
+          fi
