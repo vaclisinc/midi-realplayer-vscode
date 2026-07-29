@@ -81,6 +81,7 @@ let scrubber: HTMLInputElement;
 let timeReadout: HTMLElement;
 let positionReadout: HTMLElement;
 let playButton: HTMLButtonElement;
+let pauseButton: HTMLButtonElement;
 let soundFontButton: HTMLButtonElement;
 let soundFontLabelElement: HTMLElement;
 let statusToast: HTMLElement;
@@ -186,9 +187,27 @@ function renderApplication(): void {
       </section>
       <footer class="transport" aria-label="MIDI transport">
         <div class="transport-buttons">
-          <button class="transport-button" id="go-start" type="button" aria-label="Go to start" title="Go to start">↤</button>
-          <button class="transport-button primary" id="play-pause" type="button" aria-label="Play" title="Play or pause (Space)">▶</button>
-          <button class="transport-button" id="stop" type="button" aria-label="Stop" title="Stop">■</button>
+          <button class="transport-button" id="go-start" type="button" aria-label="Go to start" title="Go to start">
+            <svg class="transport-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3.25 2.5v11M12.75 3.25 6.5 8l6.25 4.75"/>
+            </svg>
+          </button>
+          <button class="transport-button primary" id="play" type="button" aria-label="Play" aria-pressed="true" title="Play (Space)">
+            <svg class="transport-icon transport-icon-fill" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4.25 2.75 13 8l-8.75 5.25z"/>
+            </svg>
+          </button>
+          <button class="transport-button" id="pause" type="button" aria-label="Pause" aria-pressed="false" title="Pause (Space)" disabled>
+            <svg class="transport-icon transport-icon-fill" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="3.5" y="2.75" width="3.25" height="10.5"/>
+              <rect x="9.25" y="2.75" width="3.25" height="10.5"/>
+            </svg>
+          </button>
+          <button class="transport-button" id="stop" type="button" aria-label="Stop" title="Stop">
+            <svg class="transport-icon transport-icon-fill" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="3.25" y="3.25" width="9.5" height="9.5"/>
+            </svg>
+          </button>
         </div>
         <div class="time-group" aria-live="off">
           <span class="time-readout" id="time-readout">00:00.000</span>
@@ -209,7 +228,8 @@ function renderApplication(): void {
   scrubber = requireElement("#scrubber");
   timeReadout = requireElement("#time-readout");
   positionReadout = requireElement("#position-readout");
-  playButton = requireElement("#play-pause");
+  playButton = requireElement("#play");
+  pauseButton = requireElement("#pause");
   soundFontButton = requireElement("#soundfont-button");
   soundFontLabelElement = requireElement("#soundfont-label");
   statusToast = requireElement("#status-toast");
@@ -224,7 +244,8 @@ function bindApplication(): void {
     seekTo(0);
   });
   requireElement<HTMLButtonElement>("#stop").addEventListener("click", stop);
-  playButton.addEventListener("click", () => void togglePlayback());
+  playButton.addEventListener("click", () => void startPlayback());
+  pauseButton.addEventListener("click", pausePlayback);
   scrubber.addEventListener("input", () => {
     const targetTime = Number(scrubber.value);
     const nextView = centerViewWindow(
@@ -464,9 +485,8 @@ async function loadSoundFont(uri: string, label: string): Promise<void> {
       initialPlaybackRate: 1
     });
     sequencer.eventHandler.addEvent("songEnded", "viewer-ended", () => {
-      playButton.textContent = "▶";
-      playButton.setAttribute("aria-label", "Play");
       currentTime = parsedMidi.duration;
+      updateTransportButtons();
       updateReadouts();
     });
     sequencer.eventHandler.addEvent("midiError", "viewer-error", (error) => {
@@ -620,7 +640,7 @@ async function rebuildSequence(resumePreviousState = true): Promise<void> {
     sequencer.play();
     chaseActiveNotes(currentTime);
   }
-  updatePlayButton();
+  updateTransportButtons();
 }
 
 function applyTrackMuteState(track: TrackModel): void {
@@ -660,36 +680,51 @@ function queueSequenceRebuild(): void {
 }
 
 async function togglePlayback(): Promise<void> {
+  if (sequencer && !sequencer.paused) {
+    pausePlayback();
+    return;
+  }
+  await startPlayback();
+}
+
+async function startPlayback(): Promise<void> {
   if (!sequencer || !audioContext || soundFontState !== "ready") {
     vscode.postMessage({ type: "selectSoundFont" });
     return;
   }
-  if (sequencer.paused) {
-    if (currentTime >= parsedMidi.duration - 0.001) {
-      seekTo(0);
-    }
-    await audioContext.resume();
-    sequencer.currentTime = clamp(
-      pendingEngineTime,
-      0,
-      parsedMidi.duration
-    );
-    sequencer.play();
-    chaseActiveNotes(currentTime);
-  } else {
-    currentTime = sequencer.currentTime;
-    sequencer.pause();
-    synthesizer?.stopAll(false);
-    pendingEngineTime = currentTime;
+  if (!sequencer.paused) {
+    return;
   }
-  updatePlayButton();
+  if (currentTime >= parsedMidi.duration - 0.001) {
+    seekTo(0);
+  }
+  await audioContext.resume();
+  sequencer.currentTime = clamp(
+    pendingEngineTime,
+    0,
+    parsedMidi.duration
+  );
+  sequencer.play();
+  chaseActiveNotes(currentTime);
+  updateTransportButtons();
+}
+
+function pausePlayback(): void {
+  if (!sequencer || sequencer.paused) {
+    return;
+  }
+  currentTime = sequencer.currentTime;
+  sequencer.pause();
+  synthesizer?.stopAll(false);
+  pendingEngineTime = currentTime;
+  updateTransportButtons();
 }
 
 function stop(): void {
   sequencer?.pause();
   synthesizer?.stopAll(true);
   seekTo(0);
-  updatePlayButton();
+  updateTransportButtons();
 }
 
 function seekTo(time: number, engineTime = time): void {
@@ -738,10 +773,14 @@ function updateFrame(): void {
   animationFrame = requestAnimationFrame(updateFrame);
 }
 
-function updatePlayButton(): void {
+function updateTransportButtons(): void {
   const playing = sequencer ? !sequencer.paused : false;
-  playButton.textContent = playing ? "Ⅱ" : "▶";
-  playButton.setAttribute("aria-label", playing ? "Pause" : "Play");
+  playButton.disabled = playing;
+  pauseButton.disabled = !playing;
+  playButton.classList.toggle("primary", !playing);
+  pauseButton.classList.toggle("primary", playing);
+  playButton.setAttribute("aria-pressed", String(!playing));
+  pauseButton.setAttribute("aria-pressed", String(playing));
 }
 
 function updateReadouts(): void {
@@ -993,7 +1032,7 @@ function setSoundFontState(state: SoundFontState, message: string): void {
       : "Choose SoundFont"
   );
   showStatus(message);
-  updatePlayButton();
+  updateTransportButtons();
 }
 
 function showStatus(message: string): void {

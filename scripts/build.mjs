@@ -53,7 +53,7 @@ const soundFontLicenseTarget = resolve(
 );
 const instrumentSpriteSource = resolve(
   root,
-  "assets/instruments/gm-families-wide.png"
+  "assets/instruments/gm-families-modern.png"
 );
 const instrumentSpriteTarget = resolve(
   root,

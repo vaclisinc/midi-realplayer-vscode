@@ -1,6 +1,6 @@
 # MIDI RealPlayer
 
-A VSCode Extension for multi-track MIDI playback with SoundFont instruments, note duration, velocity, program changes, and synchronized piano-roll visualization.
+A real multi-track MIDI player and viewer for VS Code with SoundFont instruments, exact note duration and velocity, program changes, and a synchronized piano roll.
 
 Open multi-track `.mid` and `.midi` files directly in VS Code, inspect them as a unified piano roll, and play them with a real SoundFont instrument bank.
 
@@ -31,7 +31,8 @@ return to the bundled bank.
 
 ## Controls
 
-- **Play/Pause:** transport button or Space
+- **Play:** Play button or Space while paused
+- **Pause:** Pause button or Space while playing
 - **Stop:** stop button
 - **Seek:** timeline slider or click the piano roll
 - **Fine seek:** focus the piano roll and use Left/Right Arrow

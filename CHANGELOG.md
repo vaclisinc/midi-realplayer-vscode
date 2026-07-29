@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.7
+
+- Separate Play and Pause into dedicated transport controls and replace text glyphs with consistent SVG icons.
+- Replace the instrument sprite with original modern editorial artwork composed left-of-frame for overlaid track controls.
+
 ## 0.1.6
 
 - Chase notes that are already sounding when playback starts or seeks into the middle of a sustained note.

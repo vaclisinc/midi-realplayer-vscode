@@ -494,6 +494,8 @@ input:focus-visible {
 }
 
 .transport-button {
+  display: grid;
+  place-items: center;
   width: 2.25rem;
   height: 2.25rem;
   border: 0;
@@ -502,6 +504,22 @@ input:focus-visible {
   background: transparent;
   cursor: pointer;
   font-size: 0.875rem;
+}
+
+.transport-icon {
+  display: block;
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  stroke-width: 1.5;
+}
+
+.transport-icon-fill {
+  fill: currentColor;
+  stroke: none;
 }
 
 .transport-button:last-child {
