@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.8
+
+- Return the zoomed piano-roll viewport to the beginning when replaying a
+  finished MIDI, pressing Stop, or using Go to Start.
+- Immediately reveal an off-screen playhead when playback starts after manually
+  zooming or panning elsewhere.
+- Add a persistent Follow control so playback can either track the playhead or
+  leave a manually selected piano-roll region undisturbed.
+- Combine Play and Pause into one stateful transport button.
+- Replace the ambiguous SoundFont status with a Default/Custom dropdown that
+  can load a local bank or restore the bundled default.
+- Keep the collapsed SoundFont control compact by showing only Default or
+  Custom instead of exposing a bank name or file name.
+
 ## 0.1.7
 
 - Separate Play and Pause into dedicated transport controls and replace text glyphs with consistent SVG icons.

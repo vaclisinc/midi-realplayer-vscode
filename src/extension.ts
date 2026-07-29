@@ -37,6 +37,8 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
       async (message: { type?: string }) => {
         if (message.type === "selectSoundFont") {
           await this.selectSoundFont(panel, document.uri);
+        } else if (message.type === "resetSoundFont") {
+          await this.resetSoundFont(panel, document.uri);
         }
       }
     );
@@ -103,7 +105,37 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     await panel.webview.postMessage({
       type: "soundFontSelected",
       uri: panel.webview.asWebviewUri(soundFontUri).toString(),
-      label: path.basename(soundFontUri.fsPath)
+      label: path.basename(soundFontUri.fsPath),
+      custom: true
+    });
+  }
+
+  private async resetSoundFont(
+    panel: vscode.WebviewPanel,
+    midiUri: vscode.Uri
+  ): Promise<void> {
+    await vscode.workspace
+      .getConfiguration("midiRealPlayer")
+      .update(
+        SOUND_FONT_SETTING,
+        undefined,
+        vscode.ConfigurationTarget.Global
+      );
+
+    const soundFontUri = vscode.Uri.joinPath(
+      this.context.extensionUri,
+      "media",
+      BUNDLED_SOUND_FONT
+    );
+    panel.webview.options = {
+      enableScripts: true,
+      localResourceRoots: this.getLocalRoots(midiUri, soundFontUri)
+    };
+    await panel.webview.postMessage({
+      type: "soundFontSelected",
+      uri: panel.webview.asWebviewUri(soundFontUri).toString(),
+      label: "Default",
+      custom: false
     });
   }
 
@@ -172,9 +204,10 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     const midiUri = webview.asWebviewUri(document.uri);
     const soundFont = this.getSoundFont();
     const soundFontUri = webview.asWebviewUri(soundFont).toString();
-    const soundFontLabel = this.getConfiguredSoundFont()
+    const configuredSoundFont = this.getConfiguredSoundFont();
+    const soundFontLabel = configuredSoundFont
       ? path.basename(soundFont.fsPath)
-      : "GeneralUser GS · Built in";
+      : "Default";
 
     return `<!doctype html>
 <html lang="en">
@@ -204,6 +237,7 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     data-worklet-uri="${escapeAttribute(worklet.toString())}"
     data-sound-font-uri="${escapeAttribute(soundFontUri)}"
     data-sound-font-label="${escapeAttribute(soundFontLabel)}"
+    data-sound-font-custom="${configuredSoundFont ? "true" : "false"}"
   >
     <div id="app" aria-busy="true">
       <section class="loading-screen" role="status">

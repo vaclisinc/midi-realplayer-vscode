@@ -3,6 +3,22 @@ export interface ViewWindow {
   end: number;
 }
 
+export function resetViewWindowToStart(
+  viewStart: number,
+  viewEnd: number,
+  duration: number
+): ViewWindow {
+  const boundedDuration = Math.max(0, duration);
+  const windowDuration = Math.min(
+    Math.max(0, viewEnd - viewStart),
+    boundedDuration
+  );
+  return {
+    start: 0,
+    end: windowDuration
+  };
+}
+
 export function centerViewWindow(
   time: number,
   viewStart: number,
@@ -37,7 +53,21 @@ export function followPlaybackView(
   const windowDuration = Math.max(0, viewEnd - viewStart);
   const boundedRatio = Math.min(Math.max(followRatio, 0), 1);
   const followEdge = viewStart + windowDuration * boundedRatio;
-  if (time <= followEdge || windowDuration >= duration) {
+  if (windowDuration >= duration) {
+    return { start: viewStart, end: viewEnd };
+  }
+  if (time < viewStart) {
+    const leadingRatio = 1 - boundedRatio;
+    const nextStart = Math.min(
+      Math.max(0, time - windowDuration * leadingRatio),
+      Math.max(0, duration - windowDuration)
+    );
+    return {
+      start: nextStart,
+      end: nextStart + windowDuration
+    };
+  }
+  if (time <= followEdge) {
     return { start: viewStart, end: viewEnd };
   }
   const nextStart = Math.min(

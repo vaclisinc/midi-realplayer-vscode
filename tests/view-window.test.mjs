@@ -5,8 +5,23 @@ import {
   centerViewWindow,
   followPlaybackView,
   panViewWindow,
+  resetViewWindowToStart,
   zoomViewWindow
 } from "../webview/view-window.ts";
+
+test("returning to the song start also returns a zoomed viewport", () => {
+  assert.deepEqual(resetViewWindowToStart(72, 92, 100), {
+    start: 0,
+    end: 20
+  });
+});
+
+test("returning to the song start preserves a fitted viewport", () => {
+  assert.deepEqual(resetViewWindowToStart(0, 100, 100), {
+    start: 0,
+    end: 100
+  });
+});
 
 test("scrubbing centers the current zoom window on the target time", () => {
   assert.deepEqual(centerViewWindow(50, 10, 30, 100), {
@@ -41,6 +56,12 @@ test("playback begins following after the playhead reaches the right safe area",
     start: 0,
     end: 20
   });
+});
+
+test("playback immediately reveals a playhead left of the zoomed viewport", () => {
+  const followed = followPlaybackView(20, 60, 80, 100);
+  assert.ok(Math.abs(followed.start - 14.4) < 1e-9);
+  assert.ok(Math.abs(followed.end - 34.4) < 1e-9);
 });
 
 test("pointer-anchored zoom preserves the time beneath the pointer", () => {

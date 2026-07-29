@@ -18,6 +18,7 @@ import {
   centerViewWindow,
   followPlaybackView,
   panViewWindow,
+  resetViewWindowToStart,
   zoomViewWindow
 } from "./view-window";
 
@@ -51,6 +52,9 @@ type TrackModel = {
 type SoundFontState = "missing" | "loading" | "ready" | "error";
 
 const vscode = acquireVsCodeApi();
+const savedWebviewState = vscode.getState() as
+  | { followPlayhead?: boolean }
+  | undefined;
 const body = document.body;
 const app = requireElement<HTMLDivElement>("#app");
 
@@ -59,6 +63,7 @@ const fileName = body.dataset.fileName ?? "sequence.mid";
 const workletUri = body.dataset.workletUri ?? "";
 let soundFontUri = body.dataset.soundFontUri ?? "";
 let soundFontLabel = body.dataset.soundFontLabel ?? "Choose SoundFont";
+let soundFontIsCustom = body.dataset.soundFontCustom === "true";
 
 let parsedMidi: Midi;
 let originalMidi: BasicMIDI;
@@ -76,14 +81,21 @@ let rebuildQueue = Promise.resolve();
 let useDirectChannelMuting = false;
 let pendingEngineTime = 0;
 let animationFrame = 0;
+let followPlayhead = savedWebviewState?.followPlayhead ?? true;
 let canvas: HTMLCanvasElement;
 let scrubber: HTMLInputElement;
 let timeReadout: HTMLElement;
 let positionReadout: HTMLElement;
 let playButton: HTMLButtonElement;
-let pauseButton: HTMLButtonElement;
+let playIcon: SVGElement;
+let pauseIcon: SVGElement;
+let followPlayheadButton: HTMLButtonElement;
+let followPlayheadState: HTMLElement;
 let soundFontButton: HTMLButtonElement;
-let soundFontLabelElement: HTMLElement;
+let soundFontModeElement: HTMLElement;
+let soundFontMenu: HTMLElement;
+let defaultSoundFontOption: HTMLButtonElement;
+let customSoundFontOption: HTMLButtonElement;
 let statusToast: HTMLElement;
 
 void initialize();
@@ -186,27 +198,32 @@ function renderApplication(): void {
         </div>
       </section>
       <footer class="transport" aria-label="MIDI transport">
-        <div class="transport-buttons">
-          <button class="transport-button" id="go-start" type="button" aria-label="Go to start" title="Go to start">
-            <svg class="transport-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M3.25 2.5v11M12.75 3.25 6.5 8l6.25 4.75"/>
-            </svg>
-          </button>
-          <button class="transport-button primary" id="play" type="button" aria-label="Play" aria-pressed="true" title="Play (Space)">
-            <svg class="transport-icon transport-icon-fill" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M4.25 2.75 13 8l-8.75 5.25z"/>
-            </svg>
-          </button>
-          <button class="transport-button" id="pause" type="button" aria-label="Pause" aria-pressed="false" title="Pause (Space)" disabled>
-            <svg class="transport-icon transport-icon-fill" viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="3.5" y="2.75" width="3.25" height="10.5"/>
-              <rect x="9.25" y="2.75" width="3.25" height="10.5"/>
-            </svg>
-          </button>
-          <button class="transport-button" id="stop" type="button" aria-label="Stop" title="Stop">
-            <svg class="transport-icon transport-icon-fill" viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="3.25" y="3.25" width="9.5" height="9.5"/>
-            </svg>
+        <div class="transport-cluster">
+          <div class="transport-buttons">
+            <button class="transport-button" id="go-start" type="button" aria-label="Go to start" title="Go to start">
+              <svg class="transport-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M3.25 2.5v11M12.75 3.25 6.5 8l6.25 4.75"/>
+              </svg>
+            </button>
+            <button class="transport-button primary" id="play" type="button" aria-label="Play" title="Play (Space)">
+              <svg class="transport-icon transport-icon-fill" id="play-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M4.25 2.75 13 8l-8.75 5.25z"/>
+              </svg>
+              <svg class="transport-icon transport-icon-fill" id="pause-icon" viewBox="0 0 16 16" aria-hidden="true" hidden>
+                <rect x="3.5" y="2.75" width="3.25" height="10.5"/>
+                <rect x="9.25" y="2.75" width="3.25" height="10.5"/>
+              </svg>
+            </button>
+            <button class="transport-button" id="stop" type="button" aria-label="Stop" title="Stop">
+              <svg class="transport-icon transport-icon-fill" viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="3.25" y="3.25" width="9.5" height="9.5"/>
+              </svg>
+            </button>
+          </div>
+          <span class="transport-divider" aria-hidden="true"></span>
+          <button class="transport-follow-toggle" id="follow-playhead" type="button" aria-pressed="${followPlayhead}">
+            <span>Follow</span>
+            <span class="transport-follow-state" id="follow-playhead-state">${followPlayhead ? "On" : "Off"}</span>
           </button>
         </div>
         <div class="time-group" aria-live="off">
@@ -214,11 +231,25 @@ function renderApplication(): void {
           <span class="position-readout" id="position-readout">1.1.000</span>
         </div>
         <input class="scrubber" id="scrubber" type="range" min="0" max="${parsedMidi.duration}" value="0" step="0.001" aria-label="Playback position">
-        <button class="soundfont-button" id="soundfont-button" type="button" data-state="missing" aria-label="Choose SoundFont">
+        <button class="soundfont-button" id="soundfont-button" type="button" data-state="missing" aria-haspopup="menu" aria-expanded="false">
           <span class="soundfont-dot" aria-hidden="true"></span>
-          <span class="soundfont-type" aria-hidden="true">SF</span>
-          <span class="soundfont-label" id="soundfont-label">${escapeHtml(soundFontLabel)}</span>
+          <span class="soundfont-title">
+            <span class="soundfont-title-full">SoundFont</span>
+            <span class="soundfont-title-short">SF</span>
+          </span>
+          <span class="soundfont-mode" id="soundfont-mode">${soundFontIsCustom ? "Custom" : "Default"}</span>
+          <svg class="soundfont-chevron" viewBox="0 0 12 12" aria-hidden="true">
+            <path d="m2.5 4.25 3.5 3.5 3.5-3.5"/>
+          </svg>
         </button>
+        <div class="soundfont-menu" id="soundfont-menu" role="menu" aria-label="Choose SoundFont" hidden>
+          <button class="soundfont-option" id="soundfont-default" type="button" role="menuitemradio" aria-checked="${!soundFontIsCustom}">
+            <span>Default</span>
+          </button>
+          <button class="soundfont-option" id="soundfont-custom" type="button" role="menuitemradio" aria-checked="${soundFontIsCustom}">
+            <span>Custom…</span>
+          </button>
+        </div>
       </footer>
       <div class="status-toast" id="status-toast" role="status" hidden></div>
     </main>
@@ -229,9 +260,15 @@ function renderApplication(): void {
   timeReadout = requireElement("#time-readout");
   positionReadout = requireElement("#position-readout");
   playButton = requireElement("#play");
-  pauseButton = requireElement("#pause");
+  playIcon = requireElement("#play-icon");
+  pauseIcon = requireElement("#pause-icon");
+  followPlayheadButton = requireElement("#follow-playhead");
+  followPlayheadState = requireElement("#follow-playhead-state");
   soundFontButton = requireElement("#soundfont-button");
-  soundFontLabelElement = requireElement("#soundfont-label");
+  soundFontModeElement = requireElement("#soundfont-mode");
+  soundFontMenu = requireElement("#soundfont-menu");
+  defaultSoundFontOption = requireElement("#soundfont-default");
+  customSoundFontOption = requireElement("#soundfont-custom");
   statusToast = requireElement("#status-toast");
   renderTrackList();
 }
@@ -241,11 +278,11 @@ function bindApplication(): void {
   resizeObserver.observe(canvas);
 
   requireElement<HTMLButtonElement>("#go-start").addEventListener("click", () => {
-    seekTo(0);
+    seekToStart();
   });
   requireElement<HTMLButtonElement>("#stop").addEventListener("click", stop);
-  playButton.addEventListener("click", () => void startPlayback());
-  pauseButton.addEventListener("click", pausePlayback);
+  playButton.addEventListener("click", () => void togglePlayback());
+  followPlayheadButton.addEventListener("click", toggleFollowPlayhead);
   scrubber.addEventListener("input", () => {
     const targetTime = Number(scrubber.value);
     const nextView = centerViewWindow(
@@ -258,7 +295,15 @@ function bindApplication(): void {
     viewEnd = nextView.end;
     seekTo(targetTime);
   });
-  soundFontButton.addEventListener("click", () => {
+  soundFontButton.addEventListener("click", toggleSoundFontMenu);
+  defaultSoundFontOption.addEventListener("click", () => {
+    closeSoundFontMenu();
+    if (soundFontIsCustom) {
+      vscode.postMessage({ type: "resetSoundFont" });
+    }
+  });
+  customSoundFontOption.addEventListener("click", () => {
+    closeSoundFontMenu();
     vscode.postMessage({ type: "selectSoundFont" });
   });
   requireElement<HTMLButtonElement>("#zoom-in").addEventListener("click", () => {
@@ -272,6 +317,7 @@ function bindApplication(): void {
     viewEnd = parsedMidi.duration;
     renderCanvas();
   });
+  updateFollowPlayheadButton();
 
   canvas.addEventListener("pointerdown", (event) => {
     const bounds = canvas.getBoundingClientRect();
@@ -354,6 +400,21 @@ function bindApplication(): void {
     }
   });
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !soundFontMenu.hidden) {
+      event.preventDefault();
+      closeSoundFontMenu();
+      soundFontButton.focus();
+      return;
+    }
+    if (
+      !soundFontMenu.hidden &&
+      (event.key === "ArrowDown" || event.key === "ArrowUp")
+    ) {
+      event.preventDefault();
+      const onDefault = document.activeElement === defaultSoundFontOption;
+      (onDefault ? customSoundFontOption : defaultSoundFontOption).focus();
+      return;
+    }
     if (
       event.code === "Space" &&
       !(event.target instanceof HTMLButtonElement) &&
@@ -361,6 +422,17 @@ function bindApplication(): void {
     ) {
       event.preventDefault();
       void togglePlayback();
+    }
+  });
+  window.addEventListener("pointerdown", (event) => {
+    const target = event.target;
+    if (
+      target instanceof Node &&
+      !soundFontMenu.hidden &&
+      !soundFontMenu.contains(target) &&
+      !soundFontButton.contains(target)
+    ) {
+      closeSoundFontMenu();
     }
   });
   window.addEventListener("beforeunload", () => {
@@ -373,10 +445,13 @@ function bindApplication(): void {
       type?: string;
       uri?: string;
       label?: string;
+      custom?: boolean;
     };
     if (message.type === "soundFontSelected" && message.uri) {
       soundFontUri = message.uri;
       soundFontLabel = message.label ?? "SoundFont";
+      soundFontIsCustom = message.custom ?? true;
+      updateSoundFontControl();
       void loadSoundFont(soundFontUri, soundFontLabel);
     }
   });
@@ -460,7 +535,6 @@ function renderTrackList(): void {
 
 async function loadSoundFont(uri: string, label: string): Promise<void> {
   setSoundFontState("loading", `Loading ${label}…`);
-  soundFontLabelElement.textContent = label;
 
   try {
     const response = await fetch(uri);
@@ -696,7 +770,10 @@ async function startPlayback(): Promise<void> {
     return;
   }
   if (currentTime >= parsedMidi.duration - 0.001) {
-    seekTo(0);
+    seekToStart();
+  }
+  if (followPlayhead) {
+    revealPlayhead();
   }
   await audioContext.resume();
   sequencer.currentTime = clamp(
@@ -723,8 +800,19 @@ function pausePlayback(): void {
 function stop(): void {
   sequencer?.pause();
   synthesizer?.stopAll(true);
-  seekTo(0);
+  seekToStart();
   updateTransportButtons();
+}
+
+function seekToStart(): void {
+  const nextView = resetViewWindowToStart(
+    viewStart,
+    viewEnd,
+    parsedMidi.duration
+  );
+  viewStart = nextView.start;
+  viewEnd = nextView.end;
+  seekTo(0);
 }
 
 function seekTo(time: number, engineTime = time): void {
@@ -759,14 +847,16 @@ function updateFrame(): void {
       0,
       parsedMidi.duration
     );
-    const nextView = followPlaybackView(
-      currentTime,
-      viewStart,
-      viewEnd,
-      parsedMidi.duration
-    );
-    viewStart = nextView.start;
-    viewEnd = nextView.end;
+    if (followPlayhead) {
+      const nextView = followPlaybackView(
+        currentTime,
+        viewStart,
+        viewEnd,
+        parsedMidi.duration
+      );
+      viewStart = nextView.start;
+      viewEnd = nextView.end;
+    }
     updateReadouts();
     renderCanvas();
   }
@@ -775,12 +865,45 @@ function updateFrame(): void {
 
 function updateTransportButtons(): void {
   const playing = sequencer ? !sequencer.paused : false;
-  playButton.disabled = playing;
-  pauseButton.disabled = !playing;
-  playButton.classList.toggle("primary", !playing);
-  pauseButton.classList.toggle("primary", playing);
-  playButton.setAttribute("aria-pressed", String(!playing));
-  pauseButton.setAttribute("aria-pressed", String(playing));
+  playIcon.toggleAttribute("hidden", playing);
+  pauseIcon.toggleAttribute("hidden", !playing);
+  playButton.setAttribute("aria-label", playing ? "Pause" : "Play");
+  playButton.title = playing ? "Pause (Space)" : "Play (Space)";
+}
+
+function toggleFollowPlayhead(): void {
+  followPlayhead = !followPlayhead;
+  vscode.setState({ followPlayhead });
+  updateFollowPlayheadButton();
+  if (followPlayhead && sequencer && !sequencer.paused) {
+    revealPlayhead();
+  }
+}
+
+function updateFollowPlayheadButton(): void {
+  followPlayheadButton.setAttribute(
+    "aria-pressed",
+    String(followPlayhead)
+  );
+  followPlayheadButton.setAttribute(
+    "aria-label",
+    `Follow playhead, ${followPlayhead ? "on" : "off"}`
+  );
+  followPlayheadButton.title =
+    "Keep playhead visible during playback";
+  followPlayheadState.textContent = followPlayhead ? "On" : "Off";
+}
+
+function revealPlayhead(): void {
+  const nextView = followPlaybackView(
+    currentTime,
+    viewStart,
+    viewEnd,
+    parsedMidi.duration
+  );
+  viewStart = nextView.start;
+  viewEnd = nextView.end;
+  renderCanvas();
 }
 
 function updateReadouts(): void {
@@ -1025,14 +1148,45 @@ function renderCanvas(): void {
 function setSoundFontState(state: SoundFontState, message: string): void {
   soundFontState = state;
   soundFontButton.dataset.state = state;
-  soundFontButton.setAttribute(
-    "aria-label",
-    state === "ready"
-      ? `SoundFont: ${soundFontLabel}. Choose another SoundFont`
-      : "Choose SoundFont"
-  );
+  updateSoundFontControl();
   showStatus(message);
   updateTransportButtons();
+}
+
+function updateSoundFontControl(): void {
+  soundFontModeElement.textContent = soundFontIsCustom
+    ? "Custom"
+    : "Default";
+  soundFontButton.setAttribute(
+    "aria-label",
+    `SoundFont: ${soundFontLabel}. Open SoundFont menu`
+  );
+  defaultSoundFontOption.setAttribute(
+    "aria-checked",
+    String(!soundFontIsCustom)
+  );
+  customSoundFontOption.setAttribute(
+    "aria-checked",
+    String(soundFontIsCustom)
+  );
+}
+
+function toggleSoundFontMenu(): void {
+  const nextOpen = soundFontMenu.hidden;
+  soundFontMenu.hidden = !nextOpen;
+  soundFontButton.setAttribute("aria-expanded", String(nextOpen));
+  if (nextOpen) {
+    hideStatus();
+    (soundFontIsCustom
+      ? customSoundFontOption
+      : defaultSoundFontOption
+    ).focus();
+  }
+}
+
+function closeSoundFontMenu(): void {
+  soundFontMenu.hidden = true;
+  soundFontButton.setAttribute("aria-expanded", "false");
 }
 
 function showStatus(message: string): void {
