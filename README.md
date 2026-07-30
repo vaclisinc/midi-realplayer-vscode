@@ -7,8 +7,7 @@ MIDI RealPlayer preserves note duration, velocity, tempo, program changes, and
 channel performance data, then renders the result through real SoundFont
 instruments.
 
-[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/v/vaclis.midi-realplayer?label=Marketplace&color=2f81f7)](https://marketplace.visualstudio.com/items?itemName=vaclis.midi-realplayer)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/vaclis.midi-realplayer?label=Installs)](https://marketplace.visualstudio.com/items?itemName=vaclis.midi-realplayer)
+[![Install from VS Marketplace](https://img.shields.io/badge/VS%20Marketplace-Install-007ACC?logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=vaclis.midi-realplayer)
 [![GitHub release](https://img.shields.io/github/v/release/vaclisinc/midi-realplayer-vscode?label=Release)](https://github.com/vaclisinc/midi-realplayer-vscode/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f2c94c.svg)](LICENSE)
 
