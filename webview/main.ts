@@ -1,10 +1,9 @@
-import { Midi } from "@tonejs/midi";
-import { BasicMIDI } from "spessasynth_core";
 import { Sequencer, WorkletSynthesizer } from "spessasynth_lib";
 import {
-  buildFilteredMidi,
-  findLogicalTrackSources
-} from "./midi-filter";
+  parseCanonicalMidi,
+  type CanonicalMidiDocument,
+  type CanonicalTrack
+} from "./canonical-midi";
 import {
   getInstrumentFamilyClass,
   getInstrumentFamilyColor,
@@ -12,7 +11,9 @@ import {
   resolveInstrumentFamily
 } from "./instrument-thumbnails";
 import { getActiveNotesAtTime } from "./note-chase";
+import { ticksToMeasures, signatureAtTick } from "./musical-time";
 import { resolvePianoRollSeek } from "./piano-roll-seek";
+import { buildPlaybackMidi } from "./playback-midi";
 import { resolvePreset } from "./preset-resolution";
 import {
   centerViewWindow,
@@ -21,6 +22,14 @@ import {
   resetViewWindowToStart,
   zoomViewWindow
 } from "./view-window";
+import {
+  collectTrackGains,
+  updateTrackGain
+} from "./track-mixer";
+import {
+  resumeTransport,
+  seekTransport
+} from "./transport-clock";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
@@ -28,33 +37,22 @@ declare function acquireVsCodeApi(): {
   setState(state: unknown): void;
 };
 
-type TrackModel = {
-  sourceTrackIndex: number;
-  sourceChannel?: number;
-  name: string;
-  instrument: string;
+type TrackModel = CanonicalTrack & {
   resolvedPreset?: string;
   presetFallback: boolean;
-  channel?: number;
-  instrumentFamily: string;
-  isDrums: boolean;
-  notes: Array<{
-    midi: number;
-    time: number;
-    duration: number;
-    velocity: number;
-    ticks: number;
-  }>;
   enabled: boolean;
+  gain: number;
   color: string;
 };
 
 type SoundFontState = "missing" | "loading" | "ready" | "error";
+type SavedWebviewState = {
+  followPlayhead?: boolean;
+  trackGains?: Record<string, number>;
+};
 
 const vscode = acquireVsCodeApi();
-const savedWebviewState = vscode.getState() as
-  | { followPlayhead?: boolean }
-  | undefined;
+const savedWebviewState = vscode.getState() as SavedWebviewState | undefined;
 const body = document.body;
 const app = requireElement<HTMLDivElement>("#app");
 
@@ -65,8 +63,7 @@ let soundFontUri = body.dataset.soundFontUri ?? "";
 let soundFontLabel = body.dataset.soundFontLabel ?? "Choose SoundFont";
 let soundFontIsCustom = body.dataset.soundFontCustom === "true";
 
-let parsedMidi: Midi;
-let originalMidi: BasicMIDI;
+let midiDocument: CanonicalMidiDocument;
 let tracks: TrackModel[] = [];
 let currentTime = 0;
 let viewStart = 0;
@@ -78,8 +75,8 @@ let audioContext: AudioContext | undefined;
 let synthesizer: WorkletSynthesizer | undefined;
 let sequencer: Sequencer | undefined;
 let rebuildQueue = Promise.resolve();
-let useDirectChannelMuting = false;
 let pendingEngineTime = 0;
+let engineSeekPending = false;
 let animationFrame = 0;
 let followPlayhead = savedWebviewState?.followPlayhead ?? true;
 let canvas: HTMLCanvasElement;
@@ -107,14 +104,13 @@ async function initialize(): Promise<void> {
       throw new Error(`VS Code could not read ${fileName}.`);
     }
     const binary = await response.arrayBuffer();
-    parsedMidi = new Midi(binary.slice(0));
-    originalMidi = BasicMIDI.fromArrayBuffer(binary.slice(0), fileName);
+    midiDocument = parseCanonicalMidi(binary.slice(0), fileName);
     createTrackModels();
     if (tracks.length === 0) {
       renderEmptyState();
       return;
     }
-    viewEnd = Math.max(parsedMidi.duration, 0.001);
+    viewEnd = Math.max(midiDocument.duration, 0.001);
     updatePitchRange();
     renderApplication();
     bindApplication();
@@ -137,46 +133,19 @@ async function initialize(): Promise<void> {
 }
 
 function createTrackModels(): void {
-  const logicalTrackSources = findLogicalTrackSources(originalMidi);
-  tracks = parsedMidi.tracks.map((track, visualIndex): TrackModel => {
-      const source = logicalTrackSources[visualIndex] ?? {
-        trackIndex: -1,
-        channel: track.notes.length > 0 ? track.channel : undefined
-      };
-      const sourceIndex =
-        source.trackIndex;
-      const instrument =
-        track.notes.length === 0
-          ? "No note events"
-          : track.channel === 9
-          ? "Drums"
-          : titleCase(track.instrument.name || "Acoustic Grand Piano");
-      const isDrums = source.channel === 9;
-      const instrumentFamily = track.instrument.family || "music";
+  tracks = midiDocument.tracks.map((track, visualIndex): TrackModel => {
       return {
-        sourceTrackIndex: sourceIndex,
-        sourceChannel: source.channel,
-        name: track.name.trim() || `Untitled Track ${visualIndex + 1}`,
-        instrument,
+        ...track,
         presetFallback: false,
-        channel: source.channel,
-        instrumentFamily,
-        isDrums,
-        notes: track.notes.map((note) => ({
-          midi: note.midi,
-          time: note.time,
-          duration: note.duration,
-          velocity: note.velocity,
-          ticks: note.ticks
-        })),
         enabled: true,
-        color: getInstrumentFamilyColor(instrumentFamily, isDrums, visualIndex)
+        gain: clamp(savedWebviewState?.trackGains?.[track.id] ?? 1, 0, 1),
+        color: getInstrumentFamilyColor(
+          track.instrumentFamily,
+          track.isDrums,
+          visualIndex
+        )
       };
     });
-  const channels = tracks
-    .map((track) => track.sourceChannel)
-    .filter((channel): channel is number => channel !== undefined);
-  useDirectChannelMuting = new Set(channels).size === channels.length;
 }
 
 function renderApplication(): void {
@@ -230,7 +199,7 @@ function renderApplication(): void {
           <span class="time-readout" id="time-readout">00:00.000</span>
           <span class="position-readout" id="position-readout">1.1.000</span>
         </div>
-        <input class="scrubber" id="scrubber" type="range" min="0" max="${parsedMidi.duration}" value="0" step="0.001" aria-label="Playback position">
+        <input class="scrubber" id="scrubber" type="range" min="0" max="${midiDocument.duration}" value="0" step="0.001" aria-label="Playback position">
         <button class="soundfont-button" id="soundfont-button" type="button" data-state="missing" aria-haspopup="menu" aria-expanded="false">
           <span class="soundfont-dot" aria-hidden="true"></span>
           <span class="soundfont-title">
@@ -289,7 +258,7 @@ function bindApplication(): void {
       targetTime,
       viewStart,
       viewEnd,
-      parsedMidi.duration
+      midiDocument.duration
     );
     viewStart = nextView.start;
     viewEnd = nextView.end;
@@ -314,7 +283,7 @@ function bindApplication(): void {
   });
   requireElement<HTMLButtonElement>("#fit-view").addEventListener("click", () => {
     viewStart = 0;
-    viewEnd = parsedMidi.duration;
+    viewEnd = midiDocument.duration;
     renderCanvas();
   });
   updateFollowPlayheadButton();
@@ -381,7 +350,7 @@ function bindApplication(): void {
         (panDelta / 600) * (viewEnd - viewStart),
         viewStart,
         viewEnd,
-        parsedMidi.duration
+        midiDocument.duration
       );
       viewStart = nextView.start;
       viewEnd = nextView.end;
@@ -473,7 +442,7 @@ function renderTrackList(): void {
             displayFamily,
             track.isDrums
           )}"
-          data-track="${index}"
+          data-track-id="${escapeHtml(track.id)}"
           data-enabled="${track.enabled}"
         >
           <span
@@ -503,6 +472,7 @@ function renderTrackList(): void {
               aria-label="${track.enabled ? "Turn off" : "Turn on"} ${escapeHtml(track.name)}"
               title="${track.enabled ? "Mute track" : "Enable track"}"
             ><span class="track-toggle-knob" aria-hidden="true"></span></button>
+            ${renderTrackVolume(track, index)}
           </span>
         </div>
       `;
@@ -512,8 +482,9 @@ function renderTrackList(): void {
   list.querySelectorAll<HTMLButtonElement>(".track-toggle").forEach((button) => {
     button.addEventListener("click", () => {
       const row = button.closest<HTMLElement>(".track-row");
-      const index = Number(row?.dataset.track ?? -1);
-      const track = tracks[index];
+      const track = tracks.find(
+        (candidate) => candidate.id === row?.dataset.trackId
+      );
       if (!track) {
         return;
       }
@@ -521,14 +492,29 @@ function renderTrackList(): void {
       renderTrackList();
       updatePitchRange();
       renderCanvas();
-      if (synthesizer && useDirectChannelMuting) {
-        applyTrackMuteState(track);
-        if (track.enabled && sequencer && !sequencer.paused) {
-          chaseActiveNotes(sequencer.currentTime, [track]);
-        }
-      } else if (sequencer) {
+      if (sequencer) {
         queueSequenceRebuild();
       }
+    });
+  });
+
+  list.querySelectorAll<HTMLInputElement>(".track-volume-slider").forEach((slider) => {
+    slider.addEventListener("input", () => {
+      const row = slider.closest<HTMLElement>(".track-row");
+      const trackId = row?.dataset.trackId ?? "";
+      const changed = updateTrackGain(
+        tracks,
+        trackId,
+        Number(slider.value) / 100
+      );
+      const track = tracks.find((candidate) => candidate.id === trackId);
+      if (!track || !changed) {
+        return;
+      }
+      const index = tracks.indexOf(track);
+      updateTrackVolumeControl(index);
+      applyTrackGainState(track);
+      persistWebviewState();
     });
   });
 }
@@ -559,7 +545,7 @@ async function loadSoundFont(uri: string, label: string): Promise<void> {
       initialPlaybackRate: 1
     });
     sequencer.eventHandler.addEvent("songEnded", "viewer-ended", () => {
-      currentTime = parsedMidi.duration;
+      currentTime = midiDocument.duration;
       updateTransportButtons();
       updateReadouts();
     });
@@ -577,7 +563,7 @@ async function loadSoundFont(uri: string, label: string): Promise<void> {
     );
     await rebuildSequence(false);
     refreshResolvedPresets();
-    applyAllTrackMuteStates();
+    applyAllTrackGainStates();
     setSoundFontState("ready", `${label} is ready.`);
     window.setTimeout(hideStatus, 1800);
   } catch (error) {
@@ -590,7 +576,7 @@ async function loadSoundFont(uri: string, label: string): Promise<void> {
 function refreshResolvedPresets(): void {
   const channels = new Set(
     tracks
-      .map((track) => track.sourceChannel)
+      .map((track) => track.playbackChannelIndex)
       .filter((channel): channel is number => channel !== undefined)
   );
   for (const channel of channels) {
@@ -616,7 +602,7 @@ function refreshResolvedPreset(
     synthesizer.midiParameters.system
   );
   for (const track of tracks) {
-    if (track.sourceChannel !== channel) {
+    if (track.playbackChannelIndex !== channel) {
       continue;
     }
     track.resolvedPreset = resolution?.name;
@@ -629,7 +615,10 @@ function refreshResolvedPreset(
 
 function updateTrackMetaElements(channel?: number): void {
   tracks.forEach((track, index) => {
-    if (channel !== undefined && track.sourceChannel !== channel) {
+    if (
+      channel !== undefined &&
+      track.playbackChannelIndex !== channel
+    ) {
       return;
     }
     const current = document.querySelector<HTMLElement>(
@@ -642,7 +631,7 @@ function updateTrackMetaElements(channel?: number): void {
 }
 
 function renderTrackMeta(track: TrackModel, index: number): string {
-  if (track.channel === undefined) {
+  if (track.sourceChannel === undefined || track.notes.length === 0) {
     return `<span class="track-meta" data-track-meta="${index}">No notes</span>`;
   }
   if (track.presetFallback && track.resolvedPreset) {
@@ -661,6 +650,54 @@ function renderTrackMeta(track: TrackModel, index: number): string {
   return `<span class="track-meta" data-track-meta="${index}">${escapeHtml(track.instrument)}</span>`;
 }
 
+function renderTrackVolume(track: TrackModel, index: number): string {
+  if (track.playbackChannelIndex === undefined) {
+    return "";
+  }
+  const percent = Math.round(track.gain * 100);
+  return `
+    <label class="track-volume" title="Track volume: ${percent}%">
+      <span class="track-volume-header" aria-hidden="true">
+        <span>Vol</span>
+        <span class="track-volume-value" data-track-volume-value="${index}">${percent}</span>
+      </span>
+      <input
+        class="track-volume-slider"
+        data-track-volume="${index}"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value="${percent}"
+        aria-label="${escapeHtml(track.name)} volume"
+        aria-valuetext="${percent} percent"
+      >
+    </label>
+  `;
+}
+
+function updateTrackVolumeControl(index: number): void {
+  const track = tracks[index];
+  if (!track) {
+    return;
+  }
+  const percent = Math.round(track.gain * 100);
+  const slider = document.querySelector<HTMLInputElement>(
+    `[data-track-volume="${index}"]`
+  );
+  const value = document.querySelector<HTMLElement>(
+    `[data-track-volume-value="${index}"]`
+  );
+  if (slider) {
+    slider.value = String(percent);
+    slider.setAttribute("aria-valuetext", `${percent} percent`);
+    slider.parentElement?.setAttribute("title", `Track volume: ${percent}%`);
+  }
+  if (value) {
+    value.textContent = String(percent);
+  }
+}
+
 async function rebuildSequence(resumePreviousState = true): Promise<void> {
   if (!sequencer || !synthesizer) {
     return;
@@ -669,29 +706,19 @@ async function rebuildSequence(resumePreviousState = true): Promise<void> {
   const restoreTime = clamp(
     resumePreviousState ? sequencer.currentTime : currentTime,
     0,
-    parsedMidi.duration
+    midiDocument.duration
   );
 
   sequencer.pause();
   synthesizer.stopAll(true);
-  const disabledTracks = tracks
-    .filter((track) => !track.enabled)
-    .map((track) => ({
-      trackIndex: track.sourceTrackIndex,
-      channel: track.sourceChannel
-    }))
-    .filter((track) => track.trackIndex >= 0);
-  if (tracks.every((track) => !track.enabled)) {
-    disabledTracks.splice(
-      0,
-      disabledTracks.length,
-      ...originalMidi.tracks.map((_, trackIndex) => ({
-        trackIndex,
-        channel: undefined
-      }))
-    );
-  }
-  const binary = buildFilteredMidi(originalMidi, disabledTracks);
+  const enabledTrackIds = new Set(
+    tracks.filter((track) => track.enabled).map((track) => track.id)
+  );
+  const binary = buildPlaybackMidi(
+    midiDocument.original,
+    midiDocument.tracks,
+    enabledTrackIds
+  );
 
   await new Promise<void>((resolve) => {
     const eventId = `viewer-rebuild-${Date.now()}-${Math.random()}`;
@@ -706,38 +733,32 @@ async function rebuildSequence(resumePreviousState = true): Promise<void> {
     sequencer!.loadNewSongList([{ binary, fileName }]);
   });
 
-  sequencer.currentTime = restoreTime;
+  applyAllTrackGainStates();
   currentTime = restoreTime;
   pendingEngineTime = restoreTime;
+  engineSeekPending = true;
   if (wasPlaying) {
     await audioContext?.resume();
-    sequencer.play();
+    resumeTransport(sequencer, restoreTime, true);
+    engineSeekPending = false;
     chaseActiveNotes(currentTime);
   }
   updateTransportButtons();
 }
 
-function applyTrackMuteState(track: TrackModel): void {
-  if (!synthesizer || track.sourceChannel === undefined) {
+function applyTrackGainState(track: TrackModel): void {
+  if (!synthesizer || track.playbackChannelIndex === undefined) {
     return;
   }
-  const channel = synthesizer.midiChannels[track.sourceChannel];
-  channel?.setSystemParameter("isMuted", !track.enabled);
-  if (!track.enabled) {
-    synthesizer.sendMessage([
-      0xb0 | track.sourceChannel,
-      120,
-      0
-    ]);
-  }
+  synthesizer.midiChannels[track.playbackChannelIndex]?.setSystemParameter(
+    "gain",
+    track.gain
+  );
 }
 
-function applyAllTrackMuteStates(): void {
-  if (!useDirectChannelMuting) {
-    return;
-  }
+function applyAllTrackGainStates(): void {
   for (const track of tracks) {
-    applyTrackMuteState(track);
+    applyTrackGainState(track);
   }
 }
 
@@ -769,20 +790,24 @@ async function startPlayback(): Promise<void> {
   if (!sequencer.paused) {
     return;
   }
-  if (currentTime >= parsedMidi.duration - 0.001) {
+  if (currentTime >= midiDocument.duration - 0.001) {
     seekToStart();
   }
   if (followPlayhead) {
     revealPlayhead();
   }
   await audioContext.resume();
-  sequencer.currentTime = clamp(
+  const targetTime = clamp(
     pendingEngineTime,
     0,
-    parsedMidi.duration
+    midiDocument.duration
   );
-  sequencer.play();
-  chaseActiveNotes(currentTime);
+  const shouldChaseAfterResume = engineSeekPending;
+  resumeTransport(sequencer, targetTime, shouldChaseAfterResume);
+  engineSeekPending = false;
+  if (shouldChaseAfterResume) {
+    chaseActiveNotes(currentTime);
+  }
   updateTransportButtons();
 }
 
@@ -794,6 +819,7 @@ function pausePlayback(): void {
   sequencer.pause();
   synthesizer?.stopAll(false);
   pendingEngineTime = currentTime;
+  engineSeekPending = false;
   updateTransportButtons();
 }
 
@@ -808,7 +834,7 @@ function seekToStart(): void {
   const nextView = resetViewWindowToStart(
     viewStart,
     viewEnd,
-    parsedMidi.duration
+    midiDocument.duration
   );
   viewStart = nextView.start;
   viewEnd = nextView.end;
@@ -816,10 +842,10 @@ function seekToStart(): void {
 }
 
 function seekTo(time: number, engineTime = time): void {
-  currentTime = clamp(time, 0, parsedMidi.duration);
-  pendingEngineTime = clamp(engineTime, 0, parsedMidi.duration);
+  currentTime = clamp(time, 0, midiDocument.duration);
+  pendingEngineTime = clamp(engineTime, 0, midiDocument.duration);
   if (sequencer) {
-    sequencer.currentTime = pendingEngineTime;
+    engineSeekPending = seekTransport(sequencer, pendingEngineTime);
     if (!sequencer.paused) {
       chaseActiveNotes(currentTime);
     }
@@ -843,16 +869,16 @@ function chaseActiveNotes(
 function updateFrame(): void {
   if (sequencer && !sequencer.paused) {
     currentTime = clamp(
-      sequencer.currentTime,
+      sequencer.currentHighResolutionTime,
       0,
-      parsedMidi.duration
+      midiDocument.duration
     );
     if (followPlayhead) {
       const nextView = followPlaybackView(
         currentTime,
         viewStart,
         viewEnd,
-        parsedMidi.duration
+        midiDocument.duration
       );
       viewStart = nextView.start;
       viewEnd = nextView.end;
@@ -873,7 +899,7 @@ function updateTransportButtons(): void {
 
 function toggleFollowPlayhead(): void {
   followPlayhead = !followPlayhead;
-  vscode.setState({ followPlayhead });
+  persistWebviewState();
   updateFollowPlayheadButton();
   if (followPlayhead && sequencer && !sequencer.paused) {
     revealPlayhead();
@@ -894,12 +920,19 @@ function updateFollowPlayheadButton(): void {
   followPlayheadState.textContent = followPlayhead ? "On" : "Off";
 }
 
+function persistWebviewState(): void {
+  vscode.setState({
+    followPlayhead,
+    trackGains: collectTrackGains(tracks)
+  } satisfies SavedWebviewState);
+}
+
 function revealPlayhead(): void {
   const nextView = followPlaybackView(
     currentTime,
     viewStart,
     viewEnd,
-    parsedMidi.duration
+    midiDocument.duration
   );
   viewStart = nextView.start;
   viewEnd = nextView.end;
@@ -917,7 +950,7 @@ function zoomView(
   anchorTime = currentTime,
   anchorRatio?: number
 ): void {
-  const duration = parsedMidi.duration;
+  const duration = midiDocument.duration;
   const currentWindow = viewEnd - viewStart;
   const resolvedRatio =
     anchorRatio ??
@@ -956,7 +989,7 @@ function renderAll(): void {
 }
 
 function renderCanvas(): void {
-  if (!canvas || !parsedMidi) {
+  if (!canvas || !midiDocument) {
     return;
   }
   const bounds = canvas.getBoundingClientRect();
@@ -1036,26 +1069,33 @@ function renderCanvas(): void {
   context.lineTo(keyboardWidth - 0.5, height);
   context.stroke();
 
-  const quarter = parsedMidi.header.ppq;
+  const quarter = midiDocument.ppq;
   const startTick = Math.max(
     0,
-    Math.floor(parsedMidi.header.secondsToTicks(viewStart) / quarter) * quarter
+    Math.floor(
+      midiDocument.original.secondsToMIDITicks(viewStart) / quarter
+    ) * quarter
   );
-  const endTick = parsedMidi.header.secondsToTicks(viewEnd) + quarter;
+  const endTick =
+    midiDocument.original.secondsToMIDITicks(viewEnd) + quarter;
   context.font = `10px ${interfaceFont}`;
   context.textBaseline = "middle";
   let lastMinorGridX = -Infinity;
   let lastMeasureLabelX = -Infinity;
 
   for (let tick = startTick; tick <= endTick; tick += quarter) {
-    const seconds = parsedMidi.header.ticksToSeconds(tick);
+    const seconds = midiDocument.original.midiTicksToSeconds(tick);
     const x =
       keyboardWidth +
       ((seconds - viewStart) / windowDuration) * gridWidth;
     if (x < keyboardWidth - 1 || x > width + 1) {
       continue;
     }
-    const measures = parsedMidi.header.ticksToMeasures(tick);
+    const measures = ticksToMeasures(
+      tick,
+      midiDocument.ppq,
+      midiDocument.timeSignatures
+    );
     const isMeasure = Math.abs(measures - Math.round(measures)) < 0.001;
     if (!isMeasure && x - lastMinorGridX < 4) {
       continue;
@@ -1235,25 +1275,25 @@ function formatTime(seconds: number): string {
 }
 
 function formatMusicalPosition(seconds: number): string {
-  const ticks = parsedMidi.header.secondsToTicks(seconds);
-  const measures = parsedMidi.header.ticksToMeasures(ticks);
+  const ticks = midiDocument.original.secondsToMIDITicks(seconds);
+  const measures = ticksToMeasures(
+    ticks,
+    midiDocument.ppq,
+    midiDocument.timeSignatures
+  );
   const bar = Math.floor(measures) + 1;
-  const signature =
-    [...parsedMidi.header.timeSignatures]
-      .reverse()
-      .find((item) => item.ticks <= ticks)?.timeSignature ?? [4, 4];
-  const beatsPerBar = signature[0] ?? 4;
+  const signature = signatureAtTick(
+    ticks,
+    midiDocument.timeSignatures
+  );
+  const beatsPerBar = signature.numerator;
   const fraction = measures - Math.floor(measures);
   const exactBeat = fraction * beatsPerBar;
   const beat = Math.floor(exactBeat) + 1;
   const subdivision = Math.floor(
-    (exactBeat - Math.floor(exactBeat)) * parsedMidi.header.ppq
+    (exactBeat - Math.floor(exactBeat)) * midiDocument.ppq
   );
   return `${bar}.${beat}.${String(subdivision).padStart(3, "0")}`;
-}
-
-function titleCase(value: string): string {
-  return value.replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function escapeHtml(value: string): string {

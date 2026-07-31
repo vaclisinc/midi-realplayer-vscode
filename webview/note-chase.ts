@@ -7,7 +7,7 @@ export type ChaseableNote = {
 
 export type ChaseableTrack = {
   enabled: boolean;
-  sourceChannel?: number;
+  playbackChannelIndex?: number;
   notes: ChaseableNote[];
 };
 
@@ -24,7 +24,7 @@ export function getActiveNotesAtTime(
   time: number
 ): ChasedNote[] {
   return tracks.flatMap((track) => {
-    if (!track.enabled || track.sourceChannel === undefined) {
+    if (!track.enabled || track.playbackChannelIndex === undefined) {
       return [];
     }
 
@@ -36,7 +36,7 @@ export function getActiveNotesAtTime(
             time + NOTE_TIME_EPSILON_SECONDS
       )
       .map((note) => ({
-        channel: track.sourceChannel!,
+        channel: track.playbackChannelIndex!,
         midi: note.midi,
         velocity: Math.max(1, Math.min(127, Math.round(note.velocity * 127)))
       }));

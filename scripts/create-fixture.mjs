@@ -1,15 +1,15 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import midiPackage from "@tonejs/midi";
+import {
+  MIDIBuilder,
+  MIDIMessageTypes
+} from "spessasynth_core";
 
-const { Midi } = midiPackage;
-const midi = new Midi();
-midi.header.setTempo(108);
-midi.header.timeSignatures.push({
-  ticks: 0,
-  timeSignature: [4, 4],
-  measures: 0
+const midi = new MIDIBuilder({
+  format: 1,
+  initialTempo: 108,
+  name: "MIDI RealPlayer Demo"
 });
-midi.header.update();
+midi.addEvent(0, 0, MIDIMessageTypes.timeSignature, [4, 2, 24, 8]);
 
 const instruments = [
   ["Acoustic Grand Piano", 0, 60],
@@ -27,24 +27,27 @@ const instruments = [
 ];
 
 for (const [trackIndex, [name, program, basePitch]] of instruments.entries()) {
-  const track = midi.addTrack();
-  track.name = name;
-  track.channel = trackIndex === 8 ? 9 : trackIndex % 16;
-  track.instrument.number = program;
+  const track = trackIndex + 1;
+  const channel = trackIndex === 8 ? 9 : trackIndex % 16;
+  midi.addTrack(name);
+  midi.programChange(0, track, channel, program);
   for (let step = 0; step < 64; step++) {
     const scaleOffset = [0, 2, 4, 7, 9, 7, 4, 2][
       (step + trackIndex) % 8
     ];
-    track.addNote({
-      midi: Math.min(108, basePitch + scaleOffset),
-      ticks: step * 240,
-      durationTicks:
-        trackIndex === 8 ? 90 : [180, 360, 720][(step + trackIndex) % 3],
-      velocity: 0.35 + ((step * 11 + trackIndex * 7) % 60) / 100
-    });
+    const onset = step * 240;
+    const duration =
+      trackIndex === 8 ? 90 : [180, 360, 720][(step + trackIndex) % 3];
+    const velocity = Math.round(
+      (0.35 + ((step * 11 + trackIndex * 7) % 60) / 100) * 127
+    );
+    const pitch = Math.min(108, basePitch + scaleOffset);
+    midi.noteOn(onset, track, channel, pitch, velocity);
+    midi.noteOff(onset + duration, track, channel, pitch);
   }
 }
 
+midi.flush(true);
 const output = new URL("../work/preview/demo.mid", import.meta.url);
 await mkdir(new URL("../work/preview", import.meta.url), { recursive: true });
-await writeFile(output, midi.toArray());
+await writeFile(output, new Uint8Array(midi.writeMIDI()));

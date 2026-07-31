@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.9
+
+- Add per-track volume controls that preserve the MIDI's original velocity,
+  expression, and controller data.
+- Replace the dual-parser/index-matching pipeline with one canonical BasicMIDI
+  document and stable logical track IDs.
+- Make Track On/Off, volume, piano-roll notes, note chase, and SoundFont status
+  refer to the same logical track.
+- Give tracks independent playback routes even when the source MIDI stores
+  several instruments on the same MIDI channel.
+- Route projects beyond 16 tracks through additional MIDI ports instead of
+  colliding with earlier instruments.
+- Preserve program changes and channel performance events when building the
+  enabled-track playback sequence.
+- Resume from the exact paused position, including silence between MIDI events,
+  instead of advancing to the next note.
+- Defer paused seeks until the sequencer is running to avoid SpessaSynth's
+  event-boundary time snapping.
+- Drive the visible playhead from SpessaSynth's smoothed audio transport clock.
+- Remember track volume settings while the MIDI editor remains open.
+- Reserve a dedicated control area so track names and instrument labels never
+  overlap the volume slider.
+- Remove the redundant Tone.js MIDI parser.
+
 ## 0.1.8
 
 - Return the zoomed piano-roll viewport to the beginning when replaying a

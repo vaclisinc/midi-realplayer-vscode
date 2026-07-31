@@ -5,7 +5,7 @@ import { getActiveNotesAtTime } from "../webview/note-chase.ts";
 const tracks = [
   {
     enabled: true,
-    sourceChannel: 4,
+    playbackChannelIndex: 4,
     notes: [
       { midi: 60, time: 1, duration: 2, velocity: 0.5 },
       { midi: 64, time: 3, duration: 1, velocity: 1 }
@@ -36,7 +36,7 @@ test("disabled tracks and tracks without a MIDI channel stay silent", () => {
   assert.deepEqual(
     getActiveNotesAtTime(
       [
-        { enabled: false, sourceChannel: 1, notes },
+        { enabled: false, playbackChannelIndex: 1, notes },
         { enabled: true, notes }
       ],
       5
@@ -51,7 +51,7 @@ test("very low nonzero velocities remain playable", () => {
       [
         {
           enabled: true,
-          sourceChannel: 2,
+          playbackChannelIndex: 2,
           notes: [{ midi: 36, time: 0, duration: 2, velocity: 0.001 }]
         }
       ],
