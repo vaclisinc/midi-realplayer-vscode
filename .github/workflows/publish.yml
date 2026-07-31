@@ -2,8 +2,12 @@ name: Publish extension
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+    paths:
+      - ".github/workflows/publish.yml"
 
 permissions:
   contents: write
@@ -16,6 +20,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -27,11 +33,17 @@ jobs:
         shell: bash
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          if [[ "${GITHUB_REF_NAME}" != "v${PACKAGE_VERSION}" ]]; then
+          RELEASE_TAG="v${PACKAGE_VERSION}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "${RELEASE_TAG}" ]]; then
             echo "Tag ${GITHUB_REF_NAME} does not match package version ${PACKAGE_VERSION}."
             exit 1
           fi
+          if ! git rev-parse --verify --quiet "refs/tags/${RELEASE_TAG}" > /dev/null; then
+            echo "Release tag ${RELEASE_TAG} does not exist."
+            exit 1
+          fi
           echo "PACKAGE_VERSION=${PACKAGE_VERSION}" >> "${GITHUB_ENV}"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "${GITHUB_ENV}"
 
       - name: Install dependencies
         run: npm ci
@@ -47,6 +59,23 @@ jobs:
 
       - name: Package VSIX
         run: npx vsce package --no-dependencies --out "midi-realplayer-${PACKAGE_VERSION}.vsix"
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "${RELEASE_TAG}" > /dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" \
+              "midi-realplayer-${PACKAGE_VERSION}.vsix" \
+              --clobber
+          else
+            gh release create "${RELEASE_TAG}" \
+              "midi-realplayer-${PACKAGE_VERSION}.vsix" \
+              --verify-tag \
+              --generate-notes \
+              --title "MIDI RealPlayer ${PACKAGE_VERSION}"
+          fi
 
       - name: Check Marketplace version
         id: marketplace
@@ -71,24 +100,13 @@ jobs:
           fi
 
       - name: Publish to VS Code Marketplace
-        if: steps.marketplace.outputs.publish == 'true'
+        if: steps.marketplace.outputs.publish == 'true' && secrets.VSCE_PAT != ''
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: npx vsce publish --no-dependencies
 
-      - name: Create or update GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Report missing Marketplace credential
+        if: steps.marketplace.outputs.publish == 'true' && secrets.VSCE_PAT == ''
         shell: bash
         run: |
-          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" \
-              "midi-realplayer-${PACKAGE_VERSION}.vsix" \
-              --clobber
-          else
-            gh release create "${GITHUB_REF_NAME}" \
-              "midi-realplayer-${PACKAGE_VERSION}.vsix" \
-              --verify-tag \
-              --generate-notes \
-              --title "MIDI RealPlayer ${PACKAGE_VERSION}"
-          fi
+          echo "::warning::VSCE_PAT is not configured; GitHub Release was created, but Marketplace publishing was skipped."
