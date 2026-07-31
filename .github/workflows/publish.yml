@@ -16,6 +16,8 @@ jobs:
   publish:
     name: Test, publish, and create release
     runs-on: ubuntu-latest
+    env:
+      HAS_VSCE_PAT: ${{ secrets.VSCE_PAT != '' }}
 
     steps:
       - name: Check out repository
@@ -100,13 +102,13 @@ jobs:
           fi
 
       - name: Publish to VS Code Marketplace
-        if: steps.marketplace.outputs.publish == 'true' && secrets.VSCE_PAT != ''
+        if: steps.marketplace.outputs.publish == 'true' && env.HAS_VSCE_PAT == 'true'
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: npx vsce publish --no-dependencies
 
       - name: Report missing Marketplace credential
-        if: steps.marketplace.outputs.publish == 'true' && secrets.VSCE_PAT == ''
+        if: steps.marketplace.outputs.publish == 'true' && env.HAS_VSCE_PAT != 'true'
         shell: bash
         run: |
           echo "::warning::VSCE_PAT is not configured; GitHub Release was created, but Marketplace publishing was skipped."
