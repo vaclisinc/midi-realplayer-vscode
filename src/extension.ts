@@ -1,9 +1,32 @@
 import * as path from "node:path";
+import {
+  copyFile,
+  open,
+  unlink,
+  type FileHandle
+} from "node:fs/promises";
 import * as vscode from "vscode";
 
 const VIEW_TYPE = "midiRealPlayer.viewer";
 const SOUND_FONT_SETTING = "soundFontPath";
 const BUNDLED_SOUND_FONT = "GeneralUser-GS.sf2";
+const VIEWER_STATE_PREFIX = "midiRealPlayer.viewerState:";
+
+type ViewerState = {
+  followPlayhead?: boolean;
+  viewMode?: "piano-roll" | "arrangement";
+  arrangementTrackHeight?: number;
+  pianoRollRowHeight?: number;
+  tracks?: Record<string, { enabled: boolean; gain: number }>;
+};
+
+type AudioExportSession = {
+  panel: vscode.WebviewPanel;
+  destination: string;
+  temporary: string;
+  handle: FileHandle;
+  expectedChunk: number;
+};
 
 class MidiDocument implements vscode.CustomDocument {
   constructor(readonly uri: vscode.Uri) {}
@@ -12,6 +35,7 @@ class MidiDocument implements vscode.CustomDocument {
 
 class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocument> {
   private readonly panels = new Set<vscode.WebviewPanel>();
+  private readonly audioExports = new Map<string, AudioExportSession>();
   private lastPanel: vscode.WebviewPanel | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
@@ -34,11 +58,50 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     panel.webview.html = this.getHtml(document, panel.webview);
 
     const receiveSubscription = panel.webview.onDidReceiveMessage(
-      async (message: { type?: string }) => {
+      async (message: {
+        type?: string;
+        state?: ViewerState;
+        suggestedName?: string;
+        exportId?: string;
+        chunkIndex?: number;
+        data?: string;
+        message?: string;
+      }) => {
         if (message.type === "selectSoundFont") {
           await this.selectSoundFont(panel, document.uri);
         } else if (message.type === "resetSoundFont") {
           await this.resetSoundFont(panel, document.uri);
+        } else if (message.type === "persistViewerState" && message.state) {
+          await this.context.workspaceState.update(
+            this.getViewerStateKey(document.uri),
+            message.state
+          );
+        } else if (message.type === "beginAudioExport") {
+          await this.beginAudioExport(
+            panel,
+            document.uri,
+            message.suggestedName ?? path.parse(document.uri.fsPath).name
+          );
+        } else if (
+          message.type === "audioExportChunk" &&
+          message.exportId &&
+          typeof message.chunkIndex === "number" &&
+          typeof message.data === "string"
+        ) {
+          await this.writeAudioExportChunk(
+            panel,
+            message.exportId,
+            message.chunkIndex,
+            message.data
+          );
+        } else if (message.type === "finishAudioExport" && message.exportId) {
+          await this.finishAudioExport(panel, message.exportId);
+        } else if (message.type === "abortAudioExport" && message.exportId) {
+          await this.failAudioExport(
+            panel,
+            message.exportId,
+            message.message ?? "Audio export was cancelled."
+          );
         }
       }
     );
@@ -51,11 +114,149 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
 
     panel.onDidDispose(() => {
       receiveSubscription.dispose();
+      void this.discardPanelAudioExports(panel);
       this.panels.delete(panel);
       if (this.lastPanel === panel) {
         this.lastPanel = [...this.panels].at(-1);
       }
     });
+  }
+
+  private getViewerStateKey(uri: vscode.Uri): string {
+    return `${VIEWER_STATE_PREFIX}${uri.toString()}`;
+  }
+
+  private async beginAudioExport(
+    panel: vscode.WebviewPanel,
+    midiUri: vscode.Uri,
+    suggestedName: string
+  ): Promise<void> {
+    const destination = await vscode.window.showSaveDialog({
+      title: "Export MIDI mix to audio",
+      defaultUri: vscode.Uri.file(
+        path.join(
+          path.dirname(midiUri.fsPath),
+          `${sanitizeFileName(suggestedName)}.wav`
+        )
+      ),
+      filters: { "Wave audio": ["wav"] },
+      saveLabel: "Export WAV"
+    });
+    if (!destination) {
+      await panel.webview.postMessage({ type: "audioExportCancelled" });
+      return;
+    }
+    if (destination.scheme !== "file") {
+      await panel.webview.postMessage({
+        type: "audioExportError",
+        message: "Audio export currently supports local file destinations."
+      });
+      return;
+    }
+
+    const exportId = createNonce();
+    const temporary = `${destination.fsPath}.midi-realplayer-${exportId}.tmp`;
+    try {
+      const handle = await open(temporary, "wx");
+      this.audioExports.set(exportId, {
+        panel,
+        destination: destination.fsPath,
+        temporary,
+        handle,
+        expectedChunk: 0
+      });
+      await panel.webview.postMessage({ type: "audioExportReady", exportId });
+    } catch (error) {
+      await panel.webview.postMessage({
+        type: "audioExportError",
+        message: getErrorMessage(error, "The export file could not be created.")
+      });
+    }
+  }
+
+  private async writeAudioExportChunk(
+    panel: vscode.WebviewPanel,
+    exportId: string,
+    chunkIndex: number,
+    data: string
+  ): Promise<void> {
+    const session = this.audioExports.get(exportId);
+    if (!session || chunkIndex !== session.expectedChunk) {
+      await this.failAudioExport(
+        panel,
+        exportId,
+        "Audio export chunks arrived out of order."
+      );
+      return;
+    }
+    try {
+      await session.handle.write(Buffer.from(data, "base64"));
+      session.expectedChunk += 1;
+      await panel.webview.postMessage({
+        type: "audioExportChunkWritten",
+        exportId,
+        chunkIndex
+      });
+    } catch (error) {
+      await this.failAudioExport(
+        panel,
+        exportId,
+        getErrorMessage(error, "Audio export could not be written.")
+      );
+    }
+  }
+
+  private async finishAudioExport(
+    panel: vscode.WebviewPanel,
+    exportId: string
+  ): Promise<void> {
+    const session = this.audioExports.get(exportId);
+    if (!session) {
+      return;
+    }
+    this.audioExports.delete(exportId);
+    try {
+      await session.handle.close();
+      await copyFile(session.temporary, session.destination);
+      await unlink(session.temporary);
+      await panel.webview.postMessage({
+        type: "audioExportComplete",
+        fileName: path.basename(session.destination)
+      });
+    } catch (error) {
+      await unlink(session.temporary).catch(() => undefined);
+      await panel.webview.postMessage({
+        type: "audioExportError",
+        message: getErrorMessage(error, "Audio export could not be finalized.")
+      });
+    }
+  }
+
+  private async failAudioExport(
+    panel: vscode.WebviewPanel,
+    exportId: string,
+    message: string
+  ): Promise<void> {
+    const session = this.audioExports.get(exportId);
+    this.audioExports.delete(exportId);
+    if (session) {
+      await session.handle.close().catch(() => undefined);
+      await unlink(session.temporary).catch(() => undefined);
+    }
+    await panel.webview.postMessage({ type: "audioExportError", message });
+  }
+
+  private async discardPanelAudioExports(
+    panel: vscode.WebviewPanel
+  ): Promise<void> {
+    const matching = [...this.audioExports.entries()].filter(
+      ([, session]) => session.panel === panel
+    );
+    for (const [exportId, session] of matching) {
+      this.audioExports.delete(exportId);
+      await session.handle.close().catch(() => undefined);
+      await unlink(session.temporary).catch(() => undefined);
+    }
   }
 
   async selectSoundFontFromCommand(): Promise<void> {
@@ -208,6 +409,10 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     const soundFontLabel = configuredSoundFont
       ? path.basename(soundFont.fsPath)
       : "Default";
+    const viewerState = this.context.workspaceState.get<ViewerState>(
+      this.getViewerStateKey(document.uri),
+      {}
+    );
 
     return `<!doctype html>
 <html lang="en">
@@ -238,6 +443,7 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     data-sound-font-uri="${escapeAttribute(soundFontUri)}"
     data-sound-font-label="${escapeAttribute(soundFontLabel)}"
     data-sound-font-custom="${configuredSoundFont ? "true" : "false"}"
+    data-viewer-state="${escapeAttribute(JSON.stringify(viewerState))}"
   >
     <div id="app" aria-busy="true">
       <section class="loading-screen" role="status">
@@ -285,4 +491,12 @@ function escapeAttribute(value: string): string {
     .replaceAll('"', "&quot;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function sanitizeFileName(value: string): string {
+  return value.replace(/[\\/:*?"<>|]/g, "-").replace(/\.(mid|midi)$/i, "");
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }

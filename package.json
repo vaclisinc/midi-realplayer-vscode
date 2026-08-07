@@ -1,8 +1,8 @@
 {
   "name": "midi-realplayer",
   "displayName": "MIDI RealPlayer",
-  "description": "A real multi-track MIDI player and viewer for VS Code with SoundFont instruments, exact note duration and velocity, and a synchronized piano roll.",
-  "version": "0.1.9",
+  "description": "A real multi-track MIDI player for VS Code with SoundFont playback, piano-roll and track views, mixer controls, and WAV export.",
+  "version": "0.2.0",
   "publisher": "vaclis",
   "license": "MIT",
   "pricing": "Free",

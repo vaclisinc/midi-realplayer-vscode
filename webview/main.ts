@@ -1,4 +1,14 @@
-import { Sequencer, WorkletSynthesizer } from "spessasynth_lib";
+import {
+  Sequencer,
+  WorkletSynthesizer,
+  audioBufferToWav
+} from "spessasynth_lib";
+import { BasicMIDI } from "spessasynth_core";
+import {
+  getArrangementCanvasHeight,
+  getArrangementNoteRect,
+  getPianoRollCanvasHeight
+} from "./arrangement-view";
 import {
   parseCanonicalMidi,
   type CanonicalMidiDocument,
@@ -22,14 +32,23 @@ import {
   resetViewWindowToStart,
   zoomViewWindow
 } from "./view-window";
+import { updateTrackGain } from "./track-mixer";
 import {
-  collectTrackGains,
-  updateTrackGain
-} from "./track-mixer";
+  chooseRulerSubdivision,
+  getRulerTickLength
+} from "./timeline-ruler";
 import {
   resumeTransport,
   seekTransport
 } from "./transport-clock";
+import {
+  DEFAULT_ARRANGEMENT_TRACK_HEIGHT,
+  DEFAULT_PIANO_ROLL_ROW_HEIGHT,
+  collectViewerTrackState,
+  normalizeViewerState,
+  type PersistedViewerState,
+  type ViewerMode
+} from "./viewer-state";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
@@ -46,15 +65,17 @@ type TrackModel = CanonicalTrack & {
 };
 
 type SoundFontState = "missing" | "loading" | "ready" | "error";
-type SavedWebviewState = {
-  followPlayhead?: boolean;
-  trackGains?: Record<string, number>;
-};
-
 const vscode = acquireVsCodeApi();
-const savedWebviewState = vscode.getState() as SavedWebviewState | undefined;
 const body = document.body;
 const app = requireElement<HTMLDivElement>("#app");
+const extensionViewerState = normalizeViewerState(
+  parseJson(body.dataset.viewerState)
+);
+const localViewerState = normalizeViewerState(vscode.getState());
+const savedViewerState = mergeViewerState(
+  extensionViewerState,
+  localViewerState
+);
 
 const midiUri = body.dataset.midiUri ?? "";
 const fileName = body.dataset.fileName ?? "sequence.mid";
@@ -71,6 +92,8 @@ let viewEnd = 1;
 let minPitch = 21;
 let maxPitch = 108;
 let soundFontState: SoundFontState = "missing";
+let soundFontLoadPromise: Promise<boolean> | undefined;
+let loadedSoundBank: ArrayBuffer | undefined;
 let audioContext: AudioContext | undefined;
 let synthesizer: WorkletSynthesizer | undefined;
 let sequencer: Sequencer | undefined;
@@ -78,8 +101,21 @@ let rebuildQueue = Promise.resolve();
 let pendingEngineTime = 0;
 let engineSeekPending = false;
 let animationFrame = 0;
-let followPlayhead = savedWebviewState?.followPlayhead ?? true;
+let followPlayhead = savedViewerState.followPlayhead ?? true;
+let viewMode: ViewerMode = savedViewerState.viewMode ?? "piano-roll";
+let arrangementTrackHeight =
+  savedViewerState.arrangementTrackHeight ??
+  DEFAULT_ARRANGEMENT_TRACK_HEIGHT;
+let pianoRollRowHeight =
+  savedViewerState.pianoRollRowHeight ?? DEFAULT_PIANO_ROLL_ROW_HEIGHT;
+let exportingAudio = false;
+let pendingExportId: string | undefined;
+const exportChunkAcknowledgements = new Map<
+  number,
+  { resolve: () => void; reject: (error: Error) => void }
+>();
 let canvas: HTMLCanvasElement;
+let canvasScroll: HTMLDivElement;
 let scrubber: HTMLInputElement;
 let timeReadout: HTMLElement;
 let positionReadout: HTMLElement;
@@ -94,6 +130,11 @@ let soundFontMenu: HTMLElement;
 let defaultSoundFontOption: HTMLButtonElement;
 let customSoundFontOption: HTMLButtonElement;
 let statusToast: HTMLElement;
+let pianoRollModeButton: HTMLButtonElement;
+let arrangementModeButton: HTMLButtonElement;
+let verticalScaleControl: HTMLLabelElement;
+let viewHeightSlider: HTMLInputElement;
+let exportButton: HTMLButtonElement;
 
 void initialize();
 
@@ -118,7 +159,8 @@ async function initialize(): Promise<void> {
     app.setAttribute("aria-busy", "false");
 
     if (soundFontUri) {
-      await loadSoundFont(soundFontUri, soundFontLabel);
+      soundFontLoadPromise = loadSoundFont(soundFontUri, soundFontLabel);
+      await soundFontLoadPromise;
     } else {
       setSoundFontState(
         "missing",
@@ -137,8 +179,8 @@ function createTrackModels(): void {
       return {
         ...track,
         presetFallback: false,
-        enabled: true,
-        gain: clamp(savedWebviewState?.trackGains?.[track.id] ?? 1, 0, 1),
+        enabled: savedViewerState.tracks?.[track.id]?.enabled ?? true,
+        gain: clamp(savedViewerState.tracks?.[track.id]?.gain ?? 1, 0, 1),
         color: getInstrumentFamilyColor(
           track.instrumentFamily,
           track.isDrums,
@@ -158,9 +200,20 @@ function renderApplication(): void {
         </header>
         <div class="track-list" id="track-list"></div>
       </aside>
-      <section class="piano-roll-region" aria-label="Piano roll">
-        <canvas id="piano-roll" tabindex="0" aria-label="Multi-track MIDI piano roll. Click a note to restart it, or click empty space to seek."></canvas>
-        <div class="view-tools" aria-label="Piano roll zoom">
+      <section class="piano-roll-region" aria-label="MIDI visualization">
+        <div class="canvas-scroll" id="canvas-scroll">
+          <canvas id="piano-roll" tabindex="0" aria-label="Multi-track MIDI piano roll. Click a note to restart it, or click empty space to seek."></canvas>
+        </div>
+        <div class="view-tools" aria-label="MIDI view controls">
+          <div class="view-mode-switch" role="group" aria-label="MIDI view mode">
+            <button id="view-piano-roll" class="view-mode-button" type="button" aria-pressed="${viewMode === "piano-roll"}" title="Piano roll view">Roll</button>
+            <button id="view-arrangement" class="view-mode-button" type="button" aria-pressed="${viewMode === "arrangement"}" title="Track arrangement view">Tracks</button>
+          </div>
+          <label class="track-height-control" id="view-height-control" title="Vertical scale">
+            <span aria-hidden="true">↕</span>
+            <input id="view-height" type="range" min="6" max="24" step="1" value="${pianoRollRowHeight}" aria-label="Piano roll row height">
+          </label>
+          <span class="view-tools-divider" aria-hidden="true"></span>
           <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
           <button id="fit-view" type="button" aria-label="Fit full MIDI">Fit</button>
           <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
@@ -200,6 +253,12 @@ function renderApplication(): void {
           <span class="position-readout" id="position-readout">1.1.000</span>
         </div>
         <input class="scrubber" id="scrubber" type="range" min="0" max="${midiDocument.duration}" value="0" step="0.001" aria-label="Playback position">
+        <button class="export-button" id="export-audio" type="button" title="Export the enabled tracks and current volumes as WAV">
+          <svg class="transport-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 2.5v7M5.25 7.25 8 10l2.75-2.75M3 12.5h10"/>
+          </svg>
+          <span>Export WAV</span>
+        </button>
         <button class="soundfont-button" id="soundfont-button" type="button" data-state="missing" aria-haspopup="menu" aria-expanded="false">
           <span class="soundfont-dot" aria-hidden="true"></span>
           <span class="soundfont-title">
@@ -225,6 +284,7 @@ function renderApplication(): void {
   `;
 
   canvas = requireElement("#piano-roll");
+  canvasScroll = requireElement("#canvas-scroll");
   scrubber = requireElement("#scrubber");
   timeReadout = requireElement("#time-readout");
   positionReadout = requireElement("#position-readout");
@@ -239,12 +299,21 @@ function renderApplication(): void {
   defaultSoundFontOption = requireElement("#soundfont-default");
   customSoundFontOption = requireElement("#soundfont-custom");
   statusToast = requireElement("#status-toast");
+  pianoRollModeButton = requireElement("#view-piano-roll");
+  arrangementModeButton = requireElement("#view-arrangement");
+  verticalScaleControl = requireElement("#view-height-control");
+  viewHeightSlider = requireElement("#view-height");
+  exportButton = requireElement("#export-audio");
+  updateViewMode();
   renderTrackList();
 }
 
 function bindApplication(): void {
-  const resizeObserver = new ResizeObserver(() => renderCanvas());
-  resizeObserver.observe(canvas);
+  const resizeObserver = new ResizeObserver(() => {
+    updateCanvasSize();
+    renderCanvas();
+  });
+  resizeObserver.observe(canvasScroll);
 
   requireElement<HTMLButtonElement>("#go-start").addEventListener("click", () => {
     seekToStart();
@@ -265,6 +334,35 @@ function bindApplication(): void {
     seekTo(targetTime);
   });
   soundFontButton.addEventListener("click", toggleSoundFontMenu);
+  pianoRollModeButton.addEventListener("click", () => {
+    setViewMode("piano-roll");
+  });
+  arrangementModeButton.addEventListener("click", () => {
+    setViewMode("arrangement");
+  });
+  viewHeightSlider.addEventListener("input", () => {
+    if (viewMode === "arrangement") {
+      arrangementTrackHeight = clamp(
+        Number(viewHeightSlider.value),
+        52,
+        180
+      );
+    } else {
+      pianoRollRowHeight = clamp(
+        Number(viewHeightSlider.value),
+        6,
+        24
+      );
+    }
+    document.documentElement.style.setProperty(
+      "--arrangement-track-height",
+      `${arrangementTrackHeight}px`
+    );
+    updateCanvasSize();
+    renderCanvas();
+    persistWebviewState();
+  });
+  exportButton.addEventListener("click", requestAudioExport);
   defaultSoundFontOption.addEventListener("click", () => {
     closeSoundFontMenu();
     if (soundFontIsCustom) {
@@ -290,8 +388,8 @@ function bindApplication(): void {
 
   canvas.addEventListener("pointerdown", (event) => {
     const bounds = canvas.getBoundingClientRect();
-    const keyboardWidth = 48;
-    const headerHeight = 28;
+    const keyboardWidth = viewMode === "piano-roll" ? 48 : 0;
+    const headerHeight = getCanvasHeaderHeight();
     const ratio = clamp(
       (event.clientX - bounds.left - keyboardWidth) /
         Math.max(1, bounds.width - keyboardWidth),
@@ -303,6 +401,7 @@ function bindApplication(): void {
     const gridHeight = Math.max(1, bounds.height - headerHeight);
     const rowHeight = gridHeight / Math.max(1, maxPitch - minPitch + 1);
     const clickedMidi =
+      viewMode === "piano-roll" &&
       event.clientX - bounds.left >= keyboardWidth && canvasY >= headerHeight
         ? clamp(
             maxPitch - Math.floor((canvasY - headerHeight) / rowHeight),
@@ -319,7 +418,7 @@ function bindApplication(): void {
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
         const bounds = canvas.getBoundingClientRect();
-        const keyboardWidth = 48;
+        const keyboardWidth = viewMode === "piano-roll" ? 48 : 0;
         const anchorRatio = clamp(
           (event.clientX - bounds.left - keyboardWidth) /
             Math.max(1, bounds.width - keyboardWidth),
@@ -358,6 +457,24 @@ function bindApplication(): void {
     },
     { passive: false }
   );
+  let syncingScroll = false;
+  const trackList = requireElement<HTMLDivElement>("#track-list");
+  trackList.addEventListener("scroll", () => {
+    if (viewMode !== "arrangement" || syncingScroll) {
+      return;
+    }
+    syncingScroll = true;
+    canvasScroll.scrollTop = trackList.scrollTop;
+    syncingScroll = false;
+  });
+  canvasScroll.addEventListener("scroll", () => {
+    if (viewMode !== "arrangement" || syncingScroll) {
+      return;
+    }
+    syncingScroll = true;
+    trackList.scrollTop = canvasScroll.scrollTop;
+    syncingScroll = false;
+  });
   canvas.addEventListener("keydown", (event) => {
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
@@ -415,13 +532,42 @@ function bindApplication(): void {
       uri?: string;
       label?: string;
       custom?: boolean;
+      exportId?: string;
+      chunkIndex?: number;
+      fileName?: string;
+      message?: string;
     };
     if (message.type === "soundFontSelected" && message.uri) {
       soundFontUri = message.uri;
       soundFontLabel = message.label ?? "SoundFont";
       soundFontIsCustom = message.custom ?? true;
       updateSoundFontControl();
-      void loadSoundFont(soundFontUri, soundFontLabel);
+      soundFontLoadPromise = loadSoundFont(soundFontUri, soundFontLabel);
+      void soundFontLoadPromise;
+    } else if (message.type === "audioExportReady" && message.exportId) {
+      pendingExportId = message.exportId;
+      void renderAndWriteAudioExport(message.exportId);
+    } else if (
+      message.type === "audioExportChunkWritten" &&
+      message.exportId === pendingExportId &&
+      typeof message.chunkIndex === "number"
+    ) {
+      exportChunkAcknowledgements.get(message.chunkIndex)?.resolve();
+      exportChunkAcknowledgements.delete(message.chunkIndex);
+    } else if (message.type === "audioExportCancelled") {
+      setExportingAudio(false);
+    } else if (message.type === "audioExportComplete") {
+      pendingExportId = undefined;
+      setExportingAudio(false);
+      showStatus(`${message.fileName ?? "WAV export"} is ready.`);
+      window.setTimeout(hideStatus, 2600);
+    } else if (message.type === "audioExportError") {
+      rejectPendingExportChunks(
+        new Error(message.message ?? "Audio export failed.")
+      );
+      pendingExportId = undefined;
+      setExportingAudio(false);
+      showStatus(message.message ?? "Audio export failed.");
     }
   });
 }
@@ -491,7 +637,9 @@ function renderTrackList(): void {
       track.enabled = !track.enabled;
       renderTrackList();
       updatePitchRange();
+      updateCanvasSize();
       renderCanvas();
+      persistWebviewState();
       if (sequencer) {
         queueSequenceRebuild();
       }
@@ -519,7 +667,7 @@ function renderTrackList(): void {
   });
 }
 
-async function loadSoundFont(uri: string, label: string): Promise<void> {
+async function loadSoundFont(uri: string, label: string): Promise<boolean> {
   setSoundFontState("loading", `Loading ${label}…`);
 
   try {
@@ -528,6 +676,7 @@ async function loadSoundFont(uri: string, label: string): Promise<void> {
       throw new Error(`VS Code could not read ${label}.`);
     }
     const soundBank = await response.arrayBuffer();
+    loadedSoundBank = soundBank.slice(0);
 
     sequencer?.pause();
     synthesizer?.stopAll(true);
@@ -566,10 +715,13 @@ async function loadSoundFont(uri: string, label: string): Promise<void> {
     applyAllTrackGainStates();
     setSoundFontState("ready", `${label} is ready.`);
     window.setTimeout(hideStatus, 1800);
+    return true;
   } catch (error) {
+    loadedSoundBank = undefined;
     const message =
       error instanceof Error ? error.message : "The SoundFont could not be loaded.";
     setSoundFontState("error", `${message} Choose another SF2, SF3, or DLS file.`);
+    return false;
   }
 }
 
@@ -783,11 +935,12 @@ async function togglePlayback(): Promise<void> {
 }
 
 async function startPlayback(): Promise<void> {
-  if (!sequencer || !audioContext || soundFontState !== "ready") {
-    vscode.postMessage({ type: "selectSoundFont" });
+  if (!(await ensureSoundFontReady())) {
     return;
   }
-  if (!sequencer.paused) {
+  const activeSequencer = sequencer;
+  const activeAudioContext = audioContext;
+  if (!activeSequencer || !activeAudioContext || !activeSequencer.paused) {
     return;
   }
   if (currentTime >= midiDocument.duration - 0.001) {
@@ -796,19 +949,197 @@ async function startPlayback(): Promise<void> {
   if (followPlayhead) {
     revealPlayhead();
   }
-  await audioContext.resume();
+  await activeAudioContext.resume();
   const targetTime = clamp(
     pendingEngineTime,
     0,
     midiDocument.duration
   );
   const shouldChaseAfterResume = engineSeekPending;
-  resumeTransport(sequencer, targetTime, shouldChaseAfterResume);
+  resumeTransport(activeSequencer, targetTime, shouldChaseAfterResume);
   engineSeekPending = false;
   if (shouldChaseAfterResume) {
     chaseActiveNotes(currentTime);
   }
   updateTransportButtons();
+}
+
+async function ensureSoundFontReady(): Promise<boolean> {
+  if (soundFontState === "loading" && soundFontLoadPromise) {
+    showStatus(`Finishing ${soundFontLabel} setup…`);
+    await soundFontLoadPromise;
+  }
+  if (
+    soundFontState === "ready" &&
+    sequencer &&
+    audioContext &&
+    synthesizer
+  ) {
+    return true;
+  }
+  if (soundFontState === "error") {
+    showStatus(
+      "The default SoundFont could not be loaded. Choose Custom in the SoundFont menu to use another bank."
+    );
+  } else {
+    showStatus("The bundled SoundFont is still being prepared.");
+  }
+  return false;
+}
+
+async function requestAudioExport(): Promise<void> {
+  if (exportingAudio || !(await ensureSoundFontReady())) {
+    return;
+  }
+  if (!tracks.some((track) => track.enabled && track.notes.length > 0)) {
+    showStatus("Enable at least one track before exporting audio.");
+    return;
+  }
+  setExportingAudio(true);
+  showStatus("Choose where to save the rendered WAV file.");
+  vscode.postMessage({
+    type: "beginAudioExport",
+    suggestedName: `${fileName.replace(/\.(mid|midi)$/i, "")}-mix`
+  });
+}
+
+async function renderAndWriteAudioExport(exportId: string): Promise<void> {
+  if (!loadedSoundBank || !synthesizer) {
+    setExportingAudio(false);
+    showStatus("The active SoundFont is not ready for export.");
+    vscode.postMessage({
+      type: "abortAudioExport",
+      exportId,
+      message: "The active SoundFont is not ready for export."
+    });
+    return;
+  }
+
+  try {
+    showStatus("Rendering the enabled tracks to WAV…");
+    const enabledTrackIds = new Set(
+      tracks.filter((track) => track.enabled).map((track) => track.id)
+    );
+    const playbackBinary = buildPlaybackMidi(
+      midiDocument.original,
+      midiDocument.tracks,
+      enabledTrackIds
+    );
+    const exportMidi = BasicMIDI.fromArrayBuffer(
+      playbackBinary.slice(0),
+      fileName
+    );
+    const sampleRate = 44_100;
+    const tailSeconds = 3;
+    const offlineContext = new OfflineAudioContext(
+      2,
+      Math.ceil((midiDocument.duration + tailSeconds) * sampleRate),
+      sampleRate
+    );
+    await offlineContext.audioWorklet.addModule(workletUri);
+    const snapshot = await synthesizer.getSnapshot();
+    const offlineSynthesizer = new WorkletSynthesizer(offlineContext);
+    offlineSynthesizer.connect(offlineContext.destination);
+    await offlineSynthesizer.startOfflineRender({
+      midiSequence: exportMidi,
+      snapshot,
+      loopCount: 0,
+      soundBankList: [
+        {
+          bankOffset: 0,
+          soundBankBuffer: loadedSoundBank.slice(0)
+        }
+      ],
+      sequencerOptions: {
+        skipToFirstNoteOn: false,
+        initialPlaybackRate: 1
+      }
+    });
+    const rendered = await offlineContext.startRendering();
+    offlineSynthesizer.destroy();
+    const wave = audioBufferToWav(rendered, { normalizeAudio: false });
+    const waveBytes = new Uint8Array(await wave.arrayBuffer());
+    const chunkSize = 256 * 1024;
+    const totalChunks = Math.ceil(waveBytes.byteLength / chunkSize);
+
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+      const start = chunkIndex * chunkSize;
+      const chunk = waveBytes.subarray(
+        start,
+        Math.min(waveBytes.byteLength, start + chunkSize)
+      );
+      showStatus(
+        `Writing WAV… ${Math.round(((chunkIndex + 1) / totalChunks) * 100)}%`
+      );
+      await sendAudioExportChunk(exportId, chunkIndex, chunk);
+    }
+    vscode.postMessage({ type: "finishAudioExport", exportId });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Audio export failed.";
+    rejectPendingExportChunks(new Error(message));
+    pendingExportId = undefined;
+    setExportingAudio(false);
+    showStatus(`Audio export failed: ${message}`);
+    vscode.postMessage({
+      type: "abortAudioExport",
+      exportId,
+      message: `Audio export failed: ${message}`
+    });
+  }
+}
+
+function sendAudioExportChunk(
+  exportId: string,
+  chunkIndex: number,
+  chunk: Uint8Array
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      exportChunkAcknowledgements.delete(chunkIndex);
+      reject(new Error("VS Code did not acknowledge an audio export chunk."));
+    }, 30_000);
+    exportChunkAcknowledgements.set(chunkIndex, {
+      resolve: () => {
+        window.clearTimeout(timeout);
+        resolve();
+      },
+      reject: (error) => {
+        window.clearTimeout(timeout);
+        reject(error);
+      }
+    });
+    vscode.postMessage({
+      type: "audioExportChunk",
+      exportId,
+      chunkIndex,
+      data: bytesToBase64(chunk)
+    });
+  });
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function rejectPendingExportChunks(error: Error): void {
+  for (const pending of exportChunkAcknowledgements.values()) {
+    pending.reject(error);
+  }
+  exportChunkAcknowledgements.clear();
+}
+
+function setExportingAudio(exporting: boolean): void {
+  exportingAudio = exporting;
+  exportButton.disabled = exporting;
+  exportButton.setAttribute("aria-busy", String(exporting));
+  exportButton.querySelector("span")!.textContent = exporting
+    ? "Exporting…"
+    : "Export WAV";
 }
 
 function pausePlayback(): void {
@@ -921,10 +1252,101 @@ function updateFollowPlayheadButton(): void {
 }
 
 function persistWebviewState(): void {
-  vscode.setState({
+  const state = {
     followPlayhead,
-    trackGains: collectTrackGains(tracks)
-  } satisfies SavedWebviewState);
+    viewMode,
+    arrangementTrackHeight,
+    pianoRollRowHeight,
+    tracks: collectViewerTrackState(tracks)
+  } satisfies PersistedViewerState;
+  vscode.setState(state);
+  vscode.postMessage({ type: "persistViewerState", state });
+}
+
+function setViewMode(nextMode: ViewerMode): void {
+  if (viewMode === nextMode) {
+    return;
+  }
+  viewMode = nextMode;
+  updateViewMode();
+  renderTrackList();
+  updateCanvasSize();
+  renderCanvas();
+  persistWebviewState();
+}
+
+function updateViewMode(): void {
+  const shell = app.querySelector<HTMLElement>(".app-shell");
+  shell?.setAttribute("data-view-mode", viewMode);
+  document.documentElement.style.setProperty(
+    "--arrangement-track-height",
+    `${arrangementTrackHeight}px`
+  );
+  pianoRollModeButton.setAttribute(
+    "aria-pressed",
+    String(viewMode === "piano-roll")
+  );
+  arrangementModeButton.setAttribute(
+    "aria-pressed",
+    String(viewMode === "arrangement")
+  );
+  verticalScaleControl.title =
+    viewMode === "arrangement" ? "Track height" : "Piano roll row height";
+  viewHeightSlider.min = viewMode === "arrangement" ? "52" : "6";
+  viewHeightSlider.max = viewMode === "arrangement" ? "180" : "24";
+  viewHeightSlider.step = viewMode === "arrangement" ? "4" : "1";
+  viewHeightSlider.value = String(
+    viewMode === "arrangement"
+      ? arrangementTrackHeight
+      : pianoRollRowHeight
+  );
+  viewHeightSlider.setAttribute(
+    "aria-label",
+    viewMode === "arrangement"
+      ? "Arrangement track height"
+      : "Piano roll row height"
+  );
+  canvas.setAttribute(
+    "aria-label",
+    viewMode === "arrangement"
+      ? "MIDI track arrangement. Click to seek."
+      : "Multi-track MIDI piano roll. Click a note to restart it, or click empty space to seek."
+  );
+  if (viewMode === "piano-roll") {
+    canvasScroll.scrollTop = 0;
+  }
+}
+
+function updateCanvasSize(): void {
+  if (!canvas || !canvasScroll) {
+    return;
+  }
+  if (viewMode === "arrangement") {
+    canvas.style.height = `${getArrangementCanvasHeight(
+      tracks.length,
+      arrangementTrackHeight,
+      getCanvasHeaderHeight(),
+      canvasScroll.clientHeight
+    )}px`;
+  } else {
+    canvas.style.height = `${getPianoRollCanvasHeight(
+      Math.max(1, maxPitch - minPitch + 1),
+      pianoRollRowHeight,
+      getCanvasHeaderHeight(),
+      canvasScroll.clientHeight
+    )}px`;
+  }
+}
+
+function getCanvasHeaderHeight(): number {
+  if (viewMode !== "arrangement") {
+    return 28;
+  }
+  return (
+    document
+      .querySelector<HTMLElement>(".section-heading")
+      ?.getBoundingClientRect().height ?? 39
+  );
 }
 
 function revealPlayhead(): void {
@@ -985,6 +1407,7 @@ function updatePitchRange(): void {
 
 function renderAll(): void {
   updateReadouts();
+  updateCanvasSize();
   renderCanvas();
 }
 
@@ -1021,6 +1444,19 @@ function renderCanvas(): void {
     styles.getPropertyValue("--interface-font").trim() || "monospace";
   const width = bounds.width;
   const height = bounds.height;
+  if (viewMode === "arrangement") {
+    renderArrangementCanvas(context, {
+      width,
+      height,
+      background,
+      raised,
+      border,
+      muted,
+      playhead,
+      interfaceFont
+    });
+    return;
+  }
   const headerHeight = 28;
   const keyboardWidth = 48;
   const gridWidth = Math.max(1, width - keyboardWidth);
@@ -1069,52 +1505,15 @@ function renderCanvas(): void {
   context.lineTo(keyboardWidth - 0.5, height);
   context.stroke();
 
-  const quarter = midiDocument.ppq;
-  const startTick = Math.max(
-    0,
-    Math.floor(
-      midiDocument.original.secondsToMIDITicks(viewStart) / quarter
-    ) * quarter
-  );
-  const endTick =
-    midiDocument.original.secondsToMIDITicks(viewEnd) + quarter;
-  context.font = `10px ${interfaceFont}`;
-  context.textBaseline = "middle";
-  let lastMinorGridX = -Infinity;
-  let lastMeasureLabelX = -Infinity;
-
-  for (let tick = startTick; tick <= endTick; tick += quarter) {
-    const seconds = midiDocument.original.midiTicksToSeconds(tick);
-    const x =
-      keyboardWidth +
-      ((seconds - viewStart) / windowDuration) * gridWidth;
-    if (x < keyboardWidth - 1 || x > width + 1) {
-      continue;
-    }
-    const measures = ticksToMeasures(
-      tick,
-      midiDocument.ppq,
-      midiDocument.timeSignatures
-    );
-    const isMeasure = Math.abs(measures - Math.round(measures)) < 0.001;
-    if (!isMeasure && x - lastMinorGridX < 4) {
-      continue;
-    }
-    lastMinorGridX = x;
-    context.strokeStyle = border;
-    context.globalAlpha = isMeasure ? 0.5 : 0.16;
-    context.lineWidth = isMeasure ? 1 : 0.5;
-    context.beginPath();
-    context.moveTo(x, isMeasure ? 0 : headerHeight);
-    context.lineTo(x, height);
-    context.stroke();
-    context.globalAlpha = 1;
-    if (isMeasure && x - lastMeasureLabelX >= 28) {
-      context.fillStyle = muted;
-      context.fillText(String(Math.round(measures) + 1), x + 5, headerHeight / 2);
-      lastMeasureLabelX = x;
-    }
-  }
+  drawMusicalRuler(context, {
+    xOrigin: keyboardWidth,
+    contentWidth: gridWidth,
+    height,
+    headerHeight,
+    border,
+    muted,
+    interfaceFont
+  });
 
   context.save();
   context.beginPath();
@@ -1182,6 +1581,229 @@ function renderCanvas(): void {
   context.moveTo(0, headerHeight);
   context.lineTo(width, headerHeight);
   context.stroke();
+  context.globalAlpha = 1;
+}
+
+function renderArrangementCanvas(
+  context: CanvasRenderingContext2D,
+  palette: {
+    width: number;
+    height: number;
+    background: string;
+    raised: string;
+    border: string;
+    muted: string;
+    playhead: string;
+    interfaceFont: string;
+  }
+): void {
+  const {
+    width,
+    height,
+    background,
+    raised,
+    border,
+    muted,
+    playhead,
+    interfaceFont
+  } = palette;
+  const headerHeight = getCanvasHeaderHeight();
+  const windowDuration = Math.max(0.001, viewEnd - viewStart);
+
+  context.fillStyle = background;
+  context.fillRect(0, 0, width, height);
+  context.fillStyle = raised;
+  context.fillRect(0, 0, width, headerHeight);
+
+  tracks.forEach((track, trackIndex) => {
+    const laneY = headerHeight + trackIndex * arrangementTrackHeight;
+    context.fillStyle = track.color;
+    context.globalAlpha = track.enabled ? 0.08 : 0.025;
+    context.fillRect(0, laneY, width, arrangementTrackHeight);
+    context.globalAlpha = 1;
+    context.strokeStyle = border;
+    context.globalAlpha = 0.75;
+    context.beginPath();
+    context.moveTo(0, laneY + arrangementTrackHeight - 0.5);
+    context.lineTo(width, laneY + arrangementTrackHeight - 0.5);
+    context.stroke();
+    context.globalAlpha = 1;
+
+    if (!track.enabled) {
+      return;
+    }
+    let trackMinPitch = 127;
+    let trackMaxPitch = 0;
+    for (const note of track.notes) {
+      trackMinPitch = Math.min(trackMinPitch, note.midi);
+      trackMaxPitch = Math.max(trackMaxPitch, note.midi);
+    }
+    if (track.notes.length === 0) {
+      trackMinPitch = 0;
+      trackMaxPitch = 127;
+    }
+    for (const note of track.notes) {
+      const noteEnd = note.time + Math.max(note.duration, 0.004);
+      if (noteEnd < viewStart || note.time > viewEnd) {
+        continue;
+      }
+      const rect = getArrangementNoteRect(
+        note,
+        trackMinPitch,
+        trackMaxPitch,
+        trackIndex,
+        arrangementTrackHeight,
+        headerHeight,
+        width,
+        viewStart,
+        viewEnd
+      );
+      context.fillStyle = track.color;
+      context.globalAlpha = 0.5 + note.velocity * 0.5;
+      context.beginPath();
+      context.roundRect(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        Math.min(2, rect.height / 2, rect.width / 2)
+      );
+      context.fill();
+      context.globalAlpha = 1;
+    }
+  });
+
+  drawMusicalRuler(context, {
+    xOrigin: 0,
+    contentWidth: width,
+    height,
+    headerHeight,
+    border,
+    muted,
+    interfaceFont
+  });
+
+  const playheadX = ((currentTime - viewStart) / windowDuration) * width;
+  if (playheadX >= 0 && playheadX <= width) {
+    context.strokeStyle = playhead;
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.moveTo(playheadX, 0);
+    context.lineTo(playheadX, height);
+    context.stroke();
+    context.fillStyle = playhead;
+    context.beginPath();
+    context.moveTo(playheadX - 5, 0);
+    context.lineTo(playheadX + 5, 0);
+    context.lineTo(playheadX, 7);
+    context.closePath();
+    context.fill();
+  }
+
+  context.strokeStyle = border;
+  context.globalAlpha = 0.9;
+  context.beginPath();
+  context.moveTo(0, headerHeight - 0.5);
+  context.lineTo(width, headerHeight - 0.5);
+  context.stroke();
+  context.globalAlpha = 1;
+}
+
+function drawMusicalRuler(
+  context: CanvasRenderingContext2D,
+  options: {
+    xOrigin: number;
+    contentWidth: number;
+    height: number;
+    headerHeight: number;
+    border: string;
+    muted: string;
+    interfaceFont: string;
+  }
+): void {
+  const {
+    xOrigin,
+    contentWidth,
+    height,
+    headerHeight,
+    border,
+    muted,
+    interfaceFont
+  } = options;
+  const windowDuration = Math.max(0.001, viewEnd - viewStart);
+  const quarter = midiDocument.ppq;
+  const centerTick = midiDocument.original.secondsToMIDITicks(
+    (viewStart + viewEnd) / 2
+  );
+  const quarterStart = midiDocument.original.midiTicksToSeconds(centerTick);
+  const quarterEnd = midiDocument.original.midiTicksToSeconds(
+    centerTick + quarter
+  );
+  const quarterWidth =
+    (Math.abs(quarterEnd - quarterStart) / windowDuration) * contentWidth;
+  const subdivision = chooseRulerSubdivision(quarterWidth);
+  const tickStep = quarter / subdivision;
+  const startTick = Math.max(
+    0,
+    Math.floor(
+      midiDocument.original.secondsToMIDITicks(viewStart) / tickStep
+    ) * tickStep
+  );
+  const endTick =
+    midiDocument.original.secondsToMIDITicks(viewEnd) + tickStep;
+  context.font = `10px ${interfaceFont}`;
+  context.textBaseline = "middle";
+  let lastGridX = -Infinity;
+  let lastLabelX = -Infinity;
+
+  for (let tick = startTick; tick <= endTick; tick += tickStep) {
+    const seconds = midiDocument.original.midiTicksToSeconds(tick);
+    const x =
+      xOrigin + ((seconds - viewStart) / windowDuration) * contentWidth;
+    if (x < xOrigin - 1 || x > xOrigin + contentWidth + 1) {
+      continue;
+    }
+    const measures = ticksToMeasures(
+      tick,
+      midiDocument.ppq,
+      midiDocument.timeSignatures
+    );
+    const isMeasure = Math.abs(measures - Math.round(measures)) < 0.001;
+    const quarterPosition = tick / quarter;
+    const isBeat =
+      Math.abs(quarterPosition - Math.round(quarterPosition)) < 0.001;
+    const kind = isMeasure
+      ? "measure"
+      : isBeat
+        ? "beat"
+        : "subdivision";
+
+    if ((isMeasure || isBeat) && (isMeasure || x - lastGridX >= 4)) {
+      context.strokeStyle = border;
+      context.globalAlpha = isMeasure ? 0.52 : 0.14;
+      context.lineWidth = isMeasure ? 1 : 0.5;
+      context.beginPath();
+      context.moveTo(x, isMeasure ? 0 : headerHeight);
+      context.lineTo(x, height);
+      context.stroke();
+      lastGridX = x;
+    }
+
+    context.strokeStyle = border;
+    context.globalAlpha = isMeasure ? 0.8 : isBeat ? 0.58 : 0.34;
+    context.lineWidth = isMeasure ? 1 : 0.75;
+    context.beginPath();
+    context.moveTo(x, headerHeight - getRulerTickLength(kind));
+    context.lineTo(x, headerHeight);
+    context.stroke();
+    context.globalAlpha = 1;
+
+    if (isMeasure && x - lastLabelX >= 44) {
+      context.fillStyle = muted;
+      context.fillText(String(Math.round(measures) + 1), x + 5, headerHeight / 2);
+      lastLabelX = x;
+    }
+  }
   context.globalAlpha = 1;
 }
 
@@ -1307,6 +1929,31 @@ function escapeHtml(value: string): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function parseJson(value: string | undefined): unknown {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function mergeViewerState(
+  persisted: Partial<PersistedViewerState>,
+  local: Partial<PersistedViewerState>
+): Partial<PersistedViewerState> {
+  return {
+    ...persisted,
+    ...local,
+    tracks: {
+      ...(persisted.tracks ?? {}),
+      ...(local.tracks ?? {})
+    }
+  };
 }
 
 function requireElement<T extends Element>(selector: string): T {

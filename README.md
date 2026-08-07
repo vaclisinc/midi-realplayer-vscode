@@ -2,7 +2,7 @@
 
 **Hear the MIDI you are looking at.**
 
-An open-source multi-track MIDI player and piano-roll viewer for VS Code.
+An open-source multi-track MIDI player and visual workspace for VS Code.
 It preserves note duration, velocity, tempo, program changes, and channel
 performance data, then plays them through real SoundFont instruments.
 
@@ -20,20 +20,25 @@ short sound. MIDI RealPlayer keeps playback and visualization synchronized:
 - Notes play for their encoded duration and velocity.
 - General MIDI programs and drums use SoundFont instruments.
 - Track On/Off and volume controls affect both what you see and hear.
+- Piano Roll and Tracks views reveal both note detail and song structure.
 - Seeking into a sustained note reconstructs the active sound correctly.
 - Tempo, sustain, pitch bend, controllers, banks, and program changes survive
   playback.
+- The current mix can be rendered directly to WAV without FFmpeg.
 
 ## Highlights
 
-- Unified, instrument-colored piano roll for `.mid` and `.midi`
+- Instrument-colored Piano Roll and DAW-style Tracks views for `.mid` and `.midi`
 - Original track names and multiple channels from combined MIDI tracks
-- Per-track On/Off and volume controls
+- Per-track On/Off and volume controls, remembered for each MIDI file
 - Click-to-seek, transport scrubbing, horizontal pan, and pointer-based zoom
+- Adjustable pitch-row and arrangement-lane heights
+- Adaptive musical ruler with bar, beat, and subdivision marks
 - Optional playhead following with Fit-to-song view
 - Bundled GeneralUser GS SoundFont, ready on first launch
 - Custom `.sf2`, `.sf3`, and `.dls` SoundFont support
-- Read-only workflow that never modifies the source MIDI
+- Offline WAV export of the enabled tracks and current volume mix
+- Source-safe workflow that never modifies the MIDI file
 
 ## Install
 
@@ -48,7 +53,8 @@ To install a GitHub release, download its `.vsix`, run
 
 1. Open a `.mid` or `.midi` file.
 2. Press **Play** or <kbd>Space</kbd>.
-3. Seek, zoom, mute tracks, or adjust their volume directly in the viewer.
+3. Seek, zoom, switch views, mute tracks, or adjust their volume directly in
+   the viewer.
 
 No SoundFont setup is required.
 
@@ -61,8 +67,11 @@ No SoundFont setup is required.
 | Seek | Piano roll, transport scrubber, or <kbd>Left</kbd> / <kbd>Right</kbd> |
 | Zoom | `+`, `−`, Fit, or <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + mouse wheel |
 | Pan | <kbd>Shift</kbd> + mouse wheel or horizontal trackpad gesture |
+| Switch view | **Roll** / **Tracks** above the timeline |
+| Vertical scale | `↕` slider above the timeline |
 | Track sound | Colored On/Off switch and Vol slider |
 | Follow playback | Follow control beside the transport |
+| Export current mix | **Export WAV** |
 
 ## SoundFonts
 

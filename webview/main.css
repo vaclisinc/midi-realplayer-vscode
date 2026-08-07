@@ -6,6 +6,7 @@
   --space-lg: 1rem;
   --space-xl: 1.5rem;
   --track-rail: 20rem;
+  --arrangement-track-height: 88px;
   --transport-height: 3.5rem;
   --brand-blue: oklch(70% 0.13 252);
   --brand-gold: oklch(78% 0.14 82);
@@ -185,6 +186,12 @@ input:focus-visible {
 .track-list {
   min-height: 0;
   overflow: auto;
+}
+
+.app-shell[data-view-mode="arrangement"] .track-row,
+.app-shell[data-view-mode="arrangement"] .track-cover {
+  min-height: var(--arrangement-track-height);
+  height: var(--arrangement-track-height);
 }
 
 .track-row {
@@ -483,6 +490,13 @@ input:focus-visible {
   background: var(--surface-base);
 }
 
+.canvas-scroll {
+  width: 100%;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 #piano-roll {
   width: 100%;
   height: 100%;
@@ -500,6 +514,68 @@ input:focus-visible {
   border: 1.5px solid var(--border);
   border-radius: 0;
   background: var(--surface-raised);
+}
+
+.view-mode-switch {
+  display: flex;
+  border-right: 1.5px solid var(--border);
+}
+
+.view-tools .view-mode-button {
+  width: auto;
+  padding: 0 0.625rem;
+  color: var(--text-muted);
+  font-size: 0.625rem;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.view-tools .view-mode-button[aria-pressed="true"] {
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+.track-height-control {
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0 0.5rem;
+  color: var(--text-muted);
+  border-right: 1.5px solid var(--border);
+}
+
+.track-height-control[hidden] {
+  display: none;
+}
+
+.track-height-control input {
+  width: 4.75rem;
+  height: 1rem;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: ns-resize;
+}
+
+.track-height-control input::-webkit-slider-runnable-track {
+  height: 2px;
+  background: color-mix(in oklch, var(--text-muted), transparent 35%);
+}
+
+.track-height-control input::-webkit-slider-thumb {
+  width: 0.5rem;
+  height: 0.75rem;
+  margin-top: -0.3125rem;
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--accent);
+}
+
+.view-tools-divider {
+  display: none;
 }
 
 .view-tools button {
@@ -526,12 +602,40 @@ input:focus-visible {
   position: relative;
   grid-area: transport;
   display: grid;
-  grid-template-columns: auto 11.5rem minmax(9rem, 1fr) auto;
+  grid-template-columns: auto 11.5rem minmax(9rem, 1fr) auto auto;
   align-items: center;
   gap: 0.875rem;
   padding: 0.375rem var(--space-md);
   background: var(--surface-raised);
   border-top: 1.5px solid var(--border);
+}
+
+.export-button {
+  height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.625rem;
+  border: 1.5px solid var(--border);
+  border-radius: 0;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.625rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.export-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+.export-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .transport-cluster,
@@ -863,9 +967,19 @@ input:focus-visible {
   }
 
   .transport {
-    grid-template-columns: auto auto minmax(5rem, 1fr) auto;
+    grid-template-columns: auto auto minmax(5rem, 1fr) auto auto;
     gap: var(--space-sm);
     padding-inline: var(--space-sm);
+  }
+
+  .export-button {
+    width: 2.25rem;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .export-button span {
+    display: none;
   }
 
   .soundfont-button {
@@ -966,7 +1080,15 @@ input:focus-visible {
   }
 
   .transport {
-    grid-template-columns: auto minmax(4rem, 1fr) auto;
+    grid-template-columns: auto minmax(4rem, 1fr) auto auto;
+  }
+
+  .view-tools .view-mode-button {
+    padding-inline: 0.4rem;
+  }
+
+  .track-height-control input {
+    width: 3.25rem;
   }
 }
 

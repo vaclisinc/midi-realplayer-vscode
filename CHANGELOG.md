@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0
+
+- Add a DAW-style Tracks view that displays every logical MIDI track in its
+  own synchronized lane.
+- Add independent vertical scaling for Piano Roll pitch rows and Tracks view
+  lanes.
+- Align arrangement lanes exactly with their instrument cards at every VS
+  Code font scale.
+- Add an adaptive musical ruler with distinct bar, beat, and zoom-dependent
+  subdivision marks in both views.
+- Remember each MIDI file's track On/Off states, volume mix, selected view,
+  vertical scale, and Follow setting across editor sessions.
+- Export the enabled tracks and current volume mix to stereo WAV using the
+  active SoundFont, without bundling FFmpeg.
+- Wait for the bundled GeneralUser GS bank on first playback instead of
+  incorrectly opening the custom SoundFont picker while it is loading.
+- Stream exported audio through the extension host in bounded chunks and only
+  replace the destination after rendering succeeds.
+
 ## 0.1.9
 
 - Add per-track volume controls that preserve the MIDI's original velocity,
