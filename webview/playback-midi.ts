@@ -9,11 +9,17 @@ import {
   type CanonicalTrack,
   type TrackId
 } from "./canonical-midi.ts";
+import type { TrackPresetSelection } from "./track-preset.ts";
+
+export type PlaybackMidiOptions = {
+  patchOverrides?: ReadonlyMap<TrackId, TrackPresetSelection>;
+};
 
 export function buildPlaybackMidi(
   original: BasicMIDI,
   tracks: readonly CanonicalTrack[],
-  enabledTrackIds: ReadonlySet<TrackId>
+  enabledTrackIds: ReadonlySet<TrackId>,
+  options: PlaybackMidiOptions = {}
 ): ArrayBuffer {
   const playback = BasicMIDI.copyFrom(original);
   const outputTracks: MIDITrack[] = [];
@@ -62,11 +68,41 @@ export function buildPlaybackMidi(
           new Uint8Array([logicalTrack.playbackPort])
         )
       );
+      const patchOverride = options.patchOverrides?.get(logicalTrack.id);
+      if (patchOverride) {
+        routed.pushEvent(
+          createChannelMessage(
+            0,
+            MIDIMessageTypes.controllerChange,
+            logicalTrack.playbackChannel,
+            [0, patchOverride.bankMSB]
+          )
+        );
+        routed.pushEvent(
+          createChannelMessage(
+            0,
+            MIDIMessageTypes.controllerChange,
+            logicalTrack.playbackChannel,
+            [32, patchOverride.bankLSB]
+          )
+        );
+        routed.pushEvent(
+          createChannelMessage(
+            0,
+            MIDIMessageTypes.programChange,
+            logicalTrack.playbackChannel,
+            [patchOverride.program]
+          )
+        );
+      }
       for (const event of source.events) {
         if (
           !isChannelMessage(event.statusByte) ||
           (event.statusByte & 0x0f) !== logicalTrack.sourceChannel
         ) {
+          continue;
+        }
+        if (patchOverride && isPatchSelectionEvent(event)) {
           continue;
         }
         routed.pushEvent(
@@ -86,6 +122,30 @@ export function buildPlaybackMidi(
   playback.format = outputTracks.length > 1 ? 1 : 0;
   playback.flush(true);
   return playback.writeMIDI();
+}
+
+function createChannelMessage(
+  ticks: number,
+  type: number,
+  channel: number,
+  data: number[]
+): MIDIMessage {
+  return new MIDIMessage(
+    ticks,
+    (type | channel) as MIDIMessage["statusByte"],
+    new Uint8Array(data)
+  );
+}
+
+function isPatchSelectionEvent(event: MIDIMessage): boolean {
+  const type = event.statusByte & 0xf0;
+  if (type === MIDIMessageTypes.programChange) {
+    return true;
+  }
+  return (
+    type === MIDIMessageTypes.controllerChange &&
+    (event.data[0] === 0 || event.data[0] === 32)
+  );
 }
 
 function copyEvents(

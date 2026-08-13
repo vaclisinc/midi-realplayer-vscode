@@ -73,6 +73,7 @@ test("one BasicMIDI parse creates stable logical tracks including automation", (
     ]
   );
   assert.equal(document.tracks[1]?.instrument, "Lead 1 (Square)");
+  assert.equal(document.tracks[1]?.program, 80);
   assert.equal(document.tracks[1]?.instrumentFamily, "synth lead");
   assert.equal(document.tracks[2]?.instrument, "Pad 1 (New Age)");
   assert.equal(document.tracks[2]?.instrumentFamily, "synth pad");
@@ -211,4 +212,60 @@ test("note duration and velocity come from the canonical BasicMIDI events", () =
   assert.equal(note.ticks, 0);
   assert.equal(note.velocity, 64 / 127);
   assert.ok(note.duration > 0);
+});
+
+test("a per-track preset override owns bank and program selection", () => {
+  const document = parseCanonicalMidi(createOwnershipRegressionMidi());
+  const lead = document.tracks.find((track) => track.name === "Synth Lead");
+  assert.ok(lead);
+  const playback = BasicMIDI.fromArrayBuffer(
+    buildPlaybackMidi(
+      document.original,
+      document.tracks,
+      new Set([lead.id]),
+      {
+        patchOverrides: new Map([
+          [
+            lead.id,
+            {
+              bankMSB: 2,
+              bankLSB: 4,
+              program: 53,
+              isGMGSDrum: false,
+              name: "Voice Oohs"
+            }
+          ]
+        ])
+      }
+    )
+  );
+  const channelEvents = playback.tracks
+    .flatMap((track) => track.events)
+    .filter((event) => (event.statusByte & 0xf0) >= 0x80);
+  assert.deepEqual(
+    channelEvents
+      .filter(
+        (event) =>
+          (event.statusByte & 0xf0) === MIDIMessageTypes.programChange
+      )
+      .map((event) => event.data[0]),
+    [53]
+  );
+  const controllers = channelEvents.filter(
+    (event) =>
+      (event.statusByte & 0xf0) === MIDIMessageTypes.controllerChange
+  );
+  assert.deepEqual(
+    controllers
+      .filter((event) => event.data[0] === 0)
+      .map((event) => event.data[1]),
+    [2]
+  );
+  assert.deepEqual(
+    controllers
+      .filter((event) => event.data[0] === 32)
+      .map((event) => event.data[1]),
+    [4]
+  );
+  assert.deepEqual(playedNoteNumbers(playback.writeMIDI()), [60]);
 });

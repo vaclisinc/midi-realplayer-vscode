@@ -13,11 +13,26 @@ const BUNDLED_SOUND_FONT = "GeneralUser-GS.sf2";
 const VIEWER_STATE_PREFIX = "midiRealPlayer.viewerState:";
 
 type ViewerState = {
+  presetDefaultsVersion?: number;
   followPlayhead?: boolean;
   viewMode?: "piano-roll" | "arrangement";
   arrangementTrackHeight?: number;
   pianoRollRowHeight?: number;
-  tracks?: Record<string, { enabled: boolean; gain: number }>;
+  tracks?: Record<
+    string,
+    {
+      enabled: boolean;
+      solo?: boolean;
+      gain: number;
+      presetOverride?: {
+        bankMSB: number;
+        bankLSB: number;
+        program: number;
+        isGMGSDrum: boolean;
+        name: string;
+      } | null;
+    }
+  >;
 };
 
 type AudioExportSession = {

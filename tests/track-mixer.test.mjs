@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  MAX_TRACK_GAIN,
   collectTrackGains,
   updateTrackGain
 } from "../webview/track-mixer.ts";
@@ -16,7 +17,10 @@ test("track gain is clamped and applied by stable track ID", () => {
   assert.equal(tracks[1]?.gain, 1);
 
   updateTrackGain(tracks, "lead", 2);
-  assert.equal(tracks[0]?.gain, 1);
+  assert.equal(tracks[0]?.gain, 2);
+
+  updateTrackGain(tracks, "lead", 3);
+  assert.equal(tracks[0]?.gain, MAX_TRACK_GAIN);
 });
 
 test("separate tracks never link gain implicitly", () => {

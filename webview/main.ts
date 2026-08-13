@@ -21,9 +21,18 @@ import {
   resolveInstrumentFamily
 } from "./instrument-thumbnails";
 import { getActiveNotesAtTime } from "./note-chase";
+import { getGMProgramFamily } from "./gm-programs";
 import { ticksToMeasures, signatureAtTick } from "./musical-time";
 import { resolvePianoRollSeek } from "./piano-roll-seek";
 import { buildPlaybackMidi } from "./playback-midi";
+import {
+  CHOIR_AAHS_PROGRAM,
+  findPresetByKey,
+  getDefaultTrackPreset,
+  presetKey,
+  type SoundFontPreset,
+  type TrackPresetSelection
+} from "./track-preset";
 import { resolvePreset } from "./preset-resolution";
 import {
   centerViewWindow,
@@ -32,7 +41,12 @@ import {
   resetViewWindowToStart,
   zoomViewWindow
 } from "./view-window";
-import { updateTrackGain } from "./track-mixer";
+import { MAX_TRACK_GAIN, updateTrackGain } from "./track-mixer";
+import {
+  getAudibleTrackIds,
+  hasSoloedTracks,
+  isTrackAudible
+} from "./track-audibility";
 import {
   chooseRulerSubdivision,
   getRulerTickLength
@@ -44,6 +58,7 @@ import {
 import {
   DEFAULT_ARRANGEMENT_TRACK_HEIGHT,
   DEFAULT_PIANO_ROLL_ROW_HEIGHT,
+  CURRENT_PRESET_DEFAULTS_VERSION,
   collectViewerTrackState,
   normalizeViewerState,
   type PersistedViewerState,
@@ -59,7 +74,9 @@ declare function acquireVsCodeApi(): {
 type TrackModel = CanonicalTrack & {
   resolvedPreset?: string;
   presetFallback: boolean;
+  presetOverride: TrackPresetSelection | null;
   enabled: boolean;
+  solo: boolean;
   gain: number;
   color: string;
 };
@@ -176,11 +193,18 @@ async function initialize(): Promise<void> {
 
 function createTrackModels(): void {
   tracks = midiDocument.tracks.map((track, visualIndex): TrackModel => {
+      const savedTrack = savedViewerState.tracks?.[track.id];
       return {
         ...track,
         presetFallback: false,
-        enabled: savedViewerState.tracks?.[track.id]?.enabled ?? true,
-        gain: clamp(savedViewerState.tracks?.[track.id]?.gain ?? 1, 0, 1),
+        presetOverride: getInitialTrackPreset(track, savedTrack?.presetOverride),
+        enabled: savedTrack?.enabled ?? true,
+        solo: savedTrack?.solo ?? false,
+        gain: clamp(
+          savedTrack?.gain ?? 1,
+          0,
+          MAX_TRACK_GAIN
+        ),
         color: getInstrumentFamilyColor(
           track.instrumentFamily,
           track.isDrums,
@@ -188,6 +212,24 @@ function createTrackModels(): void {
         )
       };
     });
+}
+
+function getInitialTrackPreset(
+  track: CanonicalTrack,
+  savedPreset: TrackPresetSelection | null | undefined
+): TrackPresetSelection | null {
+  const isOldTightDefault =
+    (savedViewerState.presetDefaultsVersion ?? 0) <
+      CURRENT_PRESET_DEFAULTS_VERSION &&
+    track.program === CHOIR_AAHS_PROGRAM &&
+    savedPreset?.program === 53 &&
+    savedPreset.bankMSB === 0 &&
+    savedPreset.bankLSB === 0 &&
+    savedPreset.name === "Voice Oohs";
+  if (savedPreset === undefined || isOldTightDefault) {
+    return getDefaultTrackPreset(track);
+  }
+  return savedPreset;
 }
 
 function renderApplication(): void {
@@ -253,7 +295,7 @@ function renderApplication(): void {
           <span class="position-readout" id="position-readout">1.1.000</span>
         </div>
         <input class="scrubber" id="scrubber" type="range" min="0" max="${midiDocument.duration}" value="0" step="0.001" aria-label="Playback position">
-        <button class="export-button" id="export-audio" type="button" title="Export the enabled tracks and current volumes as WAV">
+        <button class="export-button" id="export-audio" type="button" title="Export the audible tracks and current volumes as WAV">
           <svg class="transport-icon" viewBox="0 0 16 16" aria-hidden="true">
             <path d="M8 2.5v7M5.25 7.25 8 10l2.75-2.75M3 12.5h10"/>
           </svg>
@@ -409,7 +451,11 @@ function bindApplication(): void {
             maxPitch
           )
         : undefined;
-    const target = resolvePianoRollSeek(tracks, clickedTime, clickedMidi);
+    const target = resolvePianoRollSeek(
+      tracksWithAudibility(),
+      clickedTime,
+      clickedMidi
+    );
     seekTo(target.displayTime, target.engineTime);
   });
   canvas.addEventListener(
@@ -459,6 +505,7 @@ function bindApplication(): void {
   );
   let syncingScroll = false;
   const trackList = requireElement<HTMLDivElement>("#track-list");
+  trackList.addEventListener("change", handleTrackPresetChange);
   trackList.addEventListener("scroll", () => {
     if (viewMode !== "arrangement" || syncingScroll) {
       return;
@@ -574,6 +621,8 @@ function bindApplication(): void {
 
 function renderTrackList(): void {
   const list = requireElement<HTMLDivElement>("#track-list");
+  const previousScrollTop = list.scrollTop;
+  const anyTrackSoloed = hasSoloedTracks(tracks);
   list.innerHTML = tracks
     .map((track, index) => {
       const displayFamily = resolveInstrumentFamily(
@@ -589,7 +638,9 @@ function renderTrackList(): void {
             track.isDrums
           )}"
           data-track-id="${escapeHtml(track.id)}"
-          data-enabled="${track.enabled}"
+          data-enabled="${isTrackAudible(track, anyTrackSoloed)}"
+          data-muted="${!track.enabled}"
+          data-solo="${track.solo}"
         >
           <span
             class="track-cover${track.notes.length === 0 ? " track-cover-empty" : ""}"
@@ -609,23 +660,31 @@ function renderTrackList(): void {
             </span>
           </span>
           <span class="track-state">
-            <span class="track-state-label" aria-hidden="true">${track.enabled ? "On" : "Off"}</span>
-            <button
-              class="track-toggle"
-              type="button"
-              role="switch"
-              aria-checked="${track.enabled}"
-              aria-label="${track.enabled ? "Turn off" : "Turn on"} ${escapeHtml(track.name)}"
-              title="${track.enabled ? "Mute track" : "Enable track"}"
-            ><span class="track-toggle-knob" aria-hidden="true"></span></button>
+            <span class="track-mix-buttons" role="group" aria-label="${escapeHtml(track.name)} playback controls">
+              <button
+                class="track-mix-button track-mute"
+                type="button"
+                aria-pressed="${!track.enabled}"
+                aria-label="${track.enabled ? "Mute" : "Unmute"} ${escapeHtml(track.name)}"
+                title="${track.enabled ? "Mute" : "Unmute"} ${escapeHtml(track.name)}"
+              >M</button>
+              <button
+                class="track-mix-button track-solo"
+                type="button"
+                aria-pressed="${track.solo}"
+                aria-label="${track.solo ? "Unsolo" : "Solo"} ${escapeHtml(track.name)}"
+                title="${track.solo ? "Unsolo" : "Solo"} ${escapeHtml(track.name)}"
+              >S</button>
+            </span>
             ${renderTrackVolume(track, index)}
           </span>
         </div>
       `;
     })
     .join("");
+  list.scrollTop = previousScrollTop;
 
-  list.querySelectorAll<HTMLButtonElement>(".track-toggle").forEach((button) => {
+  list.querySelectorAll<HTMLButtonElement>(".track-mute").forEach((button) => {
     button.addEventListener("click", () => {
       const row = button.closest<HTMLElement>(".track-row");
       const track = tracks.find(
@@ -635,14 +694,21 @@ function renderTrackList(): void {
         return;
       }
       track.enabled = !track.enabled;
-      renderTrackList();
-      updatePitchRange();
-      updateCanvasSize();
-      renderCanvas();
-      persistWebviewState();
-      if (sequencer) {
-        queueSequenceRebuild();
+      applyTrackAudibilityChange();
+    });
+  });
+
+  list.querySelectorAll<HTMLButtonElement>(".track-solo").forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = button.closest<HTMLElement>(".track-row");
+      const track = tracks.find(
+        (candidate) => candidate.id === row?.dataset.trackId
+      );
+      if (!track) {
+        return;
       }
+      track.solo = !track.solo;
+      applyTrackAudibilityChange();
     });
   });
 
@@ -665,6 +731,57 @@ function renderTrackList(): void {
       persistWebviewState();
     });
   });
+}
+
+function handleTrackPresetChange(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof HTMLSelectElement)) {
+    return;
+  }
+  const index = Number(target.dataset.trackPreset);
+  const track = tracks[index];
+  if (!track || !Number.isInteger(index)) {
+    return;
+  }
+
+  if (target.value === "original") {
+    track.presetOverride = null;
+    track.presetFallback = false;
+    track.resolvedPreset = track.instrument;
+    showStatus(`${track.name} now follows the MIDI's original sound.`);
+  } else {
+    const preset = findPresetByKey(
+      getAvailableSoundFontPresets(),
+      target.value
+    );
+    if (!preset) {
+      renderTrackList();
+      showStatus("That preset is not available in the active SoundFont.");
+      return;
+    }
+    track.presetOverride = copyPreset(preset);
+    track.presetFallback = false;
+    track.resolvedPreset = preset.name;
+    showStatus(`${track.name} now plays ${preset.name}.`);
+  }
+
+  renderTrackList();
+  persistWebviewState();
+  if (sequencer) {
+    queueSequenceRebuild();
+  }
+  window.setTimeout(hideStatus, 2200);
+}
+
+function applyTrackAudibilityChange(): void {
+  renderTrackList();
+  updatePitchRange();
+  updateCanvasSize();
+  renderCanvas();
+  persistWebviewState();
+  if (sequencer) {
+    queueSequenceRebuild();
+  }
 }
 
 async function loadSoundFont(uri: string, label: string): Promise<boolean> {
@@ -714,6 +831,7 @@ async function loadSoundFont(uri: string, label: string): Promise<boolean> {
     refreshResolvedPresets();
     applyAllTrackGainStates();
     setSoundFontState("ready", `${label} is ready.`);
+    renderTrackList();
     window.setTimeout(hideStatus, 1800);
     return true;
   } catch (error) {
@@ -786,20 +904,106 @@ function renderTrackMeta(track: TrackModel, index: number): string {
   if (track.sourceChannel === undefined || track.notes.length === 0) {
     return `<span class="track-meta" data-track-meta="${index}">No notes</span>`;
   }
-  if (track.presetFallback && track.resolvedPreset) {
-    const warning =
-      `MIDI requested ${track.instrument}, but the SoundFont is playing ` +
-      `${track.resolvedPreset}.`;
-    return `
-      <span
-        class="track-meta track-meta-warning"
-        data-track-meta="${index}"
-        title="${escapeHtml(warning)}"
-        aria-label="${escapeHtml(warning)}"
-      >⚠ ${escapeHtml(track.instrument)} → ${escapeHtml(track.resolvedPreset)}</span>
-    `;
+  const presets = getAvailableSoundFontPresets().filter(
+    (preset) =>
+      (preset.isDrum ?? preset.isGMGSDrum) === track.isDrums &&
+      (track.isDrums ||
+        getGMProgramFamily(preset.program, false) === track.instrumentFamily)
+  );
+  const selection = track.presetOverride;
+  const selectedKey = selection ? presetKey(selection) : "original";
+  const selectionAvailable =
+    !selection || Boolean(findPresetByKey(presets, selectedKey));
+  const fallbackWarning =
+    track.presetFallback && track.resolvedPreset
+      ? `Requested ${selection?.name ?? track.instrument}, but this SoundFont is playing ${track.resolvedPreset}.`
+      : "";
+  const unavailableWarning =
+    selection && !selectionAvailable
+      ? `${selection.name} is unavailable in this SoundFont.`
+      : "";
+  const warning = fallbackWarning || unavailableWarning;
+  const title =
+    warning ||
+    `Sound: ${selection?.name ?? track.instrument}. MIDI original: ${track.instrument}.`;
+
+  return `
+    <label
+      class="track-preset-control${warning ? " track-meta-warning" : ""}"
+      data-track-meta="${index}"
+      title="${escapeHtml(title)}"
+    >
+      <span class="visually-hidden">Playback sound for ${escapeHtml(track.name)}</span>
+      <select
+        class="track-preset-select"
+        data-track-preset="${index}"
+        aria-label="Playback sound for ${escapeHtml(track.name)}"
+        ${presets.length === 0 ? "disabled" : ""}
+      >
+        <option value="original"${selectedKey === "original" ? " selected" : ""}>MIDI · ${escapeHtml(track.instrument)}</option>
+        ${selection && !selectionAvailable ? `<option value="${escapeHtml(selectedKey)}" selected>Unavailable · ${escapeHtml(selection.name)}</option>` : ""}
+        ${renderPresetGroup("SoundFont presets", presets, selectedKey)}
+      </select>
+    </label>
+  `;
+}
+
+function renderPresetGroup(
+  label: string,
+  presets: readonly SoundFontPreset[],
+  selectedKey: string
+): string {
+  if (presets.length === 0) {
+    return "";
   }
-  return `<span class="track-meta" data-track-meta="${index}">${escapeHtml(track.instrument)}</span>`;
+  return `
+    <optgroup label="${escapeHtml(label)}">
+      ${presets
+        .map((preset) => {
+          const key = presetKey(preset);
+          const isSelected = key === selectedKey;
+          return `<option value="${escapeHtml(key)}"${isSelected ? " selected" : ""}>${escapeHtml(preset.name)}</option>`;
+        })
+        .join("")}
+    </optgroup>
+  `;
+}
+
+function getAvailableSoundFontPresets(): SoundFontPreset[] {
+  if (!synthesizer) {
+    return [];
+  }
+  const unique = new Map<string, SoundFontPreset>();
+  for (const preset of synthesizer.presetList) {
+    const copy = copyPreset(preset);
+    unique.set(presetKey(copy), copy);
+  }
+  return [...unique.values()].sort(
+    (left, right) =>
+      left.program - right.program ||
+      left.bankMSB - right.bankMSB ||
+      left.bankLSB - right.bankLSB ||
+      left.name.localeCompare(right.name)
+  );
+}
+
+function copyPreset(preset: SoundFontPreset): SoundFontPreset {
+  return {
+    bankMSB: preset.bankMSB,
+    bankLSB: preset.bankLSB,
+    program: preset.program,
+    isGMGSDrum: preset.isGMGSDrum,
+    isDrum: preset.isDrum,
+    name: preset.name
+  };
+}
+
+function getTrackPatchOverrides(): ReadonlyMap<string, TrackPresetSelection> {
+  return new Map(
+    tracks.flatMap((track) =>
+      track.presetOverride ? [[track.id, track.presetOverride]] : []
+    )
+  );
 }
 
 function renderTrackVolume(track: TrackModel, index: number): string {
@@ -807,8 +1011,13 @@ function renderTrackVolume(track: TrackModel, index: number): string {
     return "";
   }
   const percent = Math.round(track.gain * 100);
+  const volumeDescription = describeTrackVolume(track.gain);
   return `
-    <label class="track-volume" title="Track volume: ${percent}%">
+    <label
+      class="track-volume"
+      data-boosted="${track.gain > 1}"
+      title="Track volume: ${volumeDescription}"
+    >
       <span class="track-volume-header" aria-hidden="true">
         <span>Vol</span>
         <span class="track-volume-value" data-track-volume-value="${index}">${percent}</span>
@@ -818,11 +1027,11 @@ function renderTrackVolume(track: TrackModel, index: number): string {
         data-track-volume="${index}"
         type="range"
         min="0"
-        max="100"
+        max="${MAX_TRACK_GAIN * 100}"
         step="1"
         value="${percent}"
         aria-label="${escapeHtml(track.name)} volume"
-        aria-valuetext="${percent} percent"
+        aria-valuetext="${volumeDescription}"
       >
     </label>
   `;
@@ -834,6 +1043,7 @@ function updateTrackVolumeControl(index: number): void {
     return;
   }
   const percent = Math.round(track.gain * 100);
+  const volumeDescription = describeTrackVolume(track.gain);
   const slider = document.querySelector<HTMLInputElement>(
     `[data-track-volume="${index}"]`
   );
@@ -842,12 +1052,28 @@ function updateTrackVolumeControl(index: number): void {
   );
   if (slider) {
     slider.value = String(percent);
-    slider.setAttribute("aria-valuetext", `${percent} percent`);
-    slider.parentElement?.setAttribute("title", `Track volume: ${percent}%`);
+    slider.setAttribute("aria-valuetext", volumeDescription);
+    slider.parentElement?.setAttribute(
+      "title",
+      `Track volume: ${volumeDescription}`
+    );
+    slider.parentElement?.setAttribute(
+      "data-boosted",
+      String(track.gain > 1)
+    );
   }
   if (value) {
     value.textContent = String(percent);
   }
+}
+
+function describeTrackVolume(gain: number): string {
+  const percent = Math.round(gain * 100);
+  if (gain <= 1) {
+    return `${percent} percent`;
+  }
+  const decibels = 20 * Math.log10(gain);
+  return `${percent} percent, plus ${decibels.toFixed(1)} decibels`;
 }
 
 async function rebuildSequence(resumePreviousState = true): Promise<void> {
@@ -863,13 +1089,14 @@ async function rebuildSequence(resumePreviousState = true): Promise<void> {
 
   sequencer.pause();
   synthesizer.stopAll(true);
-  const enabledTrackIds = new Set(
-    tracks.filter((track) => track.enabled).map((track) => track.id)
-  );
+  const enabledTrackIds = getAudibleTrackIds(tracks);
   const binary = buildPlaybackMidi(
     midiDocument.original,
     midiDocument.tracks,
-    enabledTrackIds
+    enabledTrackIds,
+    {
+      patchOverrides: getTrackPatchOverrides()
+    }
   );
 
   await new Promise<void>((resolve) => {
@@ -921,7 +1148,7 @@ function queueSequenceRebuild(): void {
       const message =
         error instanceof Error
           ? error.message
-          : "The enabled tracks could not be applied.";
+          : "The track Mute and Solo states could not be applied.";
       showStatus(`Track playback could not be updated: ${message}`);
     });
 }
@@ -991,8 +1218,9 @@ async function requestAudioExport(): Promise<void> {
   if (exportingAudio || !(await ensureSoundFontReady())) {
     return;
   }
-  if (!tracks.some((track) => track.enabled && track.notes.length > 0)) {
-    showStatus("Enable at least one track before exporting audio.");
+  const audibleTrackIds = getAudibleTrackIds(tracks);
+  if (!tracks.some((track) => audibleTrackIds.has(track.id) && track.notes.length > 0)) {
+    showStatus("Unmute or solo at least one track before exporting audio.");
     return;
   }
   setExportingAudio(true);
@@ -1016,14 +1244,15 @@ async function renderAndWriteAudioExport(exportId: string): Promise<void> {
   }
 
   try {
-    showStatus("Rendering the enabled tracks to WAV…");
-    const enabledTrackIds = new Set(
-      tracks.filter((track) => track.enabled).map((track) => track.id)
-    );
+    showStatus("Rendering the audible tracks to WAV…");
+    const enabledTrackIds = getAudibleTrackIds(tracks);
     const playbackBinary = buildPlaybackMidi(
       midiDocument.original,
       midiDocument.tracks,
-      enabledTrackIds
+      enabledTrackIds,
+      {
+        patchOverrides: getTrackPatchOverrides()
+      }
     );
     const exportMidi = BasicMIDI.fromArrayBuffer(
       playbackBinary.slice(0),
@@ -1192,7 +1421,8 @@ function chaseActiveNotes(
   if (!synthesizer) {
     return;
   }
-  for (const note of getActiveNotesAtTime(candidateTracks, time)) {
+  const audibleCandidates = tracksWithAudibility(candidateTracks);
+  for (const note of getActiveNotesAtTime(audibleCandidates, time)) {
     synthesizer.noteOn(note.channel, note.midi, note.velocity);
   }
 }
@@ -1253,6 +1483,7 @@ function updateFollowPlayheadButton(): void {
 
 function persistWebviewState(): void {
   const state = {
+    presetDefaultsVersion: CURRENT_PRESET_DEFAULTS_VERSION,
     followPlayhead,
     viewMode,
     arrangementTrackHeight,
@@ -1393,8 +1624,9 @@ function zoomView(
 }
 
 function updatePitchRange(): void {
+  const audibleTrackIds = getAudibleTrackIds(tracks);
   const pitches = tracks
-    .filter((track) => track.enabled)
+    .filter((track) => audibleTrackIds.has(track.id))
     .flatMap((track) => track.notes.map((note) => note.midi));
   if (pitches.length === 0) {
     minPitch = 21;
@@ -1520,8 +1752,9 @@ function renderCanvas(): void {
   context.rect(keyboardWidth, headerHeight, gridWidth, gridHeight);
   context.clip();
 
+  const audibleTrackIds = getAudibleTrackIds(tracks);
   for (const track of tracks) {
-    if (!track.enabled) {
+    if (!audibleTrackIds.has(track.id)) {
       continue;
     }
     for (const note of track.notes) {
@@ -1615,10 +1848,11 @@ function renderArrangementCanvas(
   context.fillStyle = raised;
   context.fillRect(0, 0, width, headerHeight);
 
+  const audibleTrackIds = getAudibleTrackIds(tracks);
   tracks.forEach((track, trackIndex) => {
     const laneY = headerHeight + trackIndex * arrangementTrackHeight;
     context.fillStyle = track.color;
-    context.globalAlpha = track.enabled ? 0.08 : 0.025;
+    context.globalAlpha = audibleTrackIds.has(track.id) ? 0.08 : 0.025;
     context.fillRect(0, laneY, width, arrangementTrackHeight);
     context.globalAlpha = 1;
     context.strokeStyle = border;
@@ -1629,7 +1863,7 @@ function renderArrangementCanvas(
     context.stroke();
     context.globalAlpha = 1;
 
-    if (!track.enabled) {
+    if (!audibleTrackIds.has(track.id)) {
       return;
     }
     let trackMinPitch = 127;
@@ -1707,6 +1941,16 @@ function renderArrangementCanvas(
   context.lineTo(width, headerHeight - 0.5);
   context.stroke();
   context.globalAlpha = 1;
+}
+
+function tracksWithAudibility(
+  sourceTracks: TrackModel[] = tracks
+): TrackModel[] {
+  const anyTrackSoloed = hasSoloedTracks(tracks);
+  return sourceTracks.map((track) => ({
+    ...track,
+    enabled: isTrackAudible(track, anyTrackSoloed)
+  }));
 }
 
 function drawMusicalRuler(

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.1
+
+- Add Logic-style per-track Mute and Solo controls with support for soloing
+  multiple tracks.
+- Preserve each track's underlying Mute state while Solo is active, then
+  restore it when the final Solo is released.
+- Apply the same audible-track selection to playback, note chase, seeking,
+  visualization, saved viewer state, and WAV export.
+- Extend per-track volume to 200% (approximately +6 dB) while keeping 100% as
+  unity gain.
+- Add a per-track SoundFont preset picker that preserves the original MIDI
+  program as an option and remembers each track's selection.
+- Keep the fuller Concert Choir sound for Choir Aahs tracks and preserve the
+  MIDI's original timing without automatic attack compensation.
+- Apply track preset overrides to live playback, seeking, Mute/Solo rebuilds,
+  and offline WAV export through the same canonical MIDI route.
+
 ## 0.2.0
 
 - Add a DAW-style Tracks view that displays every logical MIDI track in its

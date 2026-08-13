@@ -3,6 +3,8 @@ export type MixableTrack = {
   gain: number;
 };
 
+export const MAX_TRACK_GAIN = 2;
+
 export function updateTrackGain(
   tracks: MixableTrack[],
   trackId: string,
@@ -13,7 +15,7 @@ export function updateTrackGain(
     return false;
   }
 
-  track.gain = Math.min(1, Math.max(0, gain));
+  track.gain = Math.min(MAX_TRACK_GAIN, Math.max(0, gain));
   return true;
 }
 

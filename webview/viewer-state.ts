@@ -1,11 +1,20 @@
+import { MAX_TRACK_GAIN } from "./track-mixer.ts";
+import {
+  normalizeTrackPreset,
+  type TrackPresetSelection
+} from "./track-preset.ts";
+
 export type ViewerMode = "piano-roll" | "arrangement";
 
 export type PersistedTrackState = {
   enabled: boolean;
+  solo: boolean;
   gain: number;
+  presetOverride?: TrackPresetSelection | null;
 };
 
 export type PersistedViewerState = {
+  presetDefaultsVersion: number;
   followPlayhead: boolean;
   viewMode: ViewerMode;
   arrangementTrackHeight: number;
@@ -15,6 +24,7 @@ export type PersistedViewerState = {
 
 export const DEFAULT_ARRANGEMENT_TRACK_HEIGHT = 88;
 export const DEFAULT_PIANO_ROLL_ROW_HEIGHT = 8;
+export const CURRENT_PRESET_DEFAULTS_VERSION = 2;
 
 export function normalizeViewerState(
   value: unknown
@@ -36,9 +46,12 @@ export function normalizeViewerState(
       if (!isRecord(raw)) {
         continue;
       }
+      const presetOverride = normalizeTrackPreset(raw.presetOverride);
       tracks[trackId] = {
         enabled: raw.enabled !== false,
-        gain: clampNumber(raw.gain, 0, 1, 1)
+        solo: raw.solo === true,
+        gain: clampNumber(raw.gain, 0, MAX_TRACK_GAIN, 1),
+        ...(presetOverride !== undefined ? { presetOverride } : {})
       };
     }
   }
@@ -48,11 +61,16 @@ export function normalizeViewerState(
   ])) {
     tracks[trackId] = {
       enabled: legacyEnabled[trackId] !== false,
-      gain: clampNumber(legacyGains[trackId], 0, 1, 1)
+      solo: false,
+      gain: clampNumber(legacyGains[trackId], 0, MAX_TRACK_GAIN, 1)
     };
   }
 
   return {
+    presetDefaultsVersion:
+      typeof candidate.presetDefaultsVersion === "number"
+        ? candidate.presetDefaultsVersion
+        : undefined,
     followPlayhead:
       typeof candidate.followPlayhead === "boolean"
         ? candidate.followPlayhead
@@ -76,14 +94,22 @@ export function normalizeViewerState(
 }
 
 export function collectViewerTrackState(
-  tracks: readonly { id: string; enabled: boolean; gain: number }[]
+  tracks: readonly {
+    id: string;
+    enabled: boolean;
+    solo: boolean;
+    gain: number;
+    presetOverride: TrackPresetSelection | null;
+  }[]
 ): Record<string, PersistedTrackState> {
   return Object.fromEntries(
     tracks.map((track) => [
       track.id,
       {
         enabled: track.enabled,
-        gain: clampNumber(track.gain, 0, 1, 1)
+        solo: track.solo,
+        gain: clampNumber(track.gain, 0, MAX_TRACK_GAIN, 1),
+        presetOverride: track.presetOverride
       }
     ])
   );

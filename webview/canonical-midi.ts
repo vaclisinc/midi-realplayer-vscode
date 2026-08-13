@@ -33,6 +33,7 @@ export type CanonicalTrack = {
   playbackChannel?: number;
   playbackChannelIndex?: number;
   name: string;
+  program?: number;
   instrument: string;
   instrumentFamily: string;
   isDrums: boolean;
@@ -95,6 +96,7 @@ export function parseCanonicalMidi(
         sourcePort: sourceTrack.port,
         sourceChannel,
         name: sourceTrack.name.trim() || `Untitled Track ${tracks.length + 1}`,
+        program,
         instrument: getGMProgramName(program, isDrums),
         instrumentFamily: getGMProgramFamily(program, isDrums),
         isDrums,

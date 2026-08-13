@@ -2,12 +2,9 @@ name: Publish extension
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
-    paths:
-      - ".github/workflows/publish.yml"
+  workflow_dispatch:
 
 permissions:
   contents: write

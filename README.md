@@ -18,8 +18,9 @@ Many MIDI previewers draw the right notes but play every event as the same
 short sound. MIDI RealPlayer keeps playback and visualization synchronized:
 
 - Notes play for their encoded duration and velocity.
-- General MIDI programs and drums use SoundFont instruments.
-- Track On/Off and volume controls affect both what you see and hear.
+- General MIDI programs and drums use SoundFont instruments, with per-track
+  preset selection when you want a different sound.
+- Track Mute, Solo, and volume controls affect both what you see and hear.
 - Piano Roll and Tracks views reveal both note detail and song structure.
 - Seeking into a sustained note reconstructs the active sound correctly.
 - Tempo, sustain, pitch bend, controllers, banks, and program changes survive
@@ -30,7 +31,10 @@ short sound. MIDI RealPlayer keeps playback and visualization synchronized:
 
 - Instrument-colored Piano Roll and DAW-style Tracks views for `.mid` and `.midi`
 - Original track names and multiple channels from combined MIDI tracks
-- Per-track On/Off and volume controls, remembered for each MIDI file
+- Per-track Mute, multi-track Solo, and volume controls up to +6 dB, remembered
+  for each MIDI file
+- Per-track SoundFont preset picker with the original MIDI program always one
+  click away
 - Click-to-seek, transport scrubbing, horizontal pan, and pointer-based zoom
 - Adjustable pitch-row and arrangement-lane heights
 - Adaptive musical ruler with bar, beat, and subdivision marks
@@ -53,8 +57,8 @@ To install a GitHub release, download its `.vsix`, run
 
 1. Open a `.mid` or `.midi` file.
 2. Press **Play** or <kbd>Space</kbd>.
-3. Seek, zoom, switch views, mute tracks, or adjust their volume directly in
-   the viewer.
+3. Seek, zoom, switch views, change a track's SoundFont preset, mute tracks, or
+   adjust their volume directly in the viewer.
 
 No SoundFont setup is required.
 
@@ -69,7 +73,8 @@ No SoundFont setup is required.
 | Pan | <kbd>Shift</kbd> + mouse wheel or horizontal trackpad gesture |
 | Switch view | **Roll** / **Tracks** above the timeline |
 | Vertical scale | `↕` slider above the timeline |
-| Track sound | Colored On/Off switch and Vol slider |
+| Track preset | Sound menu beneath the track name |
+| Track mix | **M** (Mute), **S** (Solo), and Vol slider |
 | Follow playback | Follow control beside the transport |
 | Export current mix | **Export WAV** |
 
@@ -79,6 +84,13 @@ The bundled
 [GeneralUser GS](https://github.com/mrbumpy409/GeneralUser-GS) bank provides
 ready-to-play General MIDI instruments. Use the **SoundFont** selector to switch
 between **Default** and a local `.sf2`, `.sf3`, or `.dls` bank.
+
+Each track's sound label is also a preset menu. Choose another sound from the
+same General MIDI instrument family in the active bank, or choose **MIDI** to
+restore the file's original program. The choice is remembered per MIDI file and
+is applied consistently to playback, seeking, Solo, and WAV export. The bundled
+Concert Choir remains the default choir sound and follows the MIDI's original
+timing without an automatic offset.
 
 Sound quality and preset coverage depend on the selected bank. If a requested
 preset is unavailable, the track displays the actual fallback sound.
