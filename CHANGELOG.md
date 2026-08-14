@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- Keep the piano-roll pitch range and canvas height fixed when muting or
+  soloing tracks, preventing the vertical view from jumping between mixes.
+
 ## 0.2.1
 
 - Add Logic-style per-track Mute and Solo controls with support for soloing

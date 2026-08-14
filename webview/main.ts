@@ -24,6 +24,7 @@ import { getActiveNotesAtTime } from "./note-chase";
 import { getGMProgramFamily } from "./gm-programs";
 import { ticksToMeasures, signatureAtTick } from "./musical-time";
 import { resolvePianoRollSeek } from "./piano-roll-seek";
+import { getMidiPitchRange } from "./pitch-range";
 import { buildPlaybackMidi } from "./playback-midi";
 import {
   CHOIR_AAHS_PROGRAM,
@@ -775,8 +776,6 @@ function handleTrackPresetChange(event: Event): void {
 
 function applyTrackAudibilityChange(): void {
   renderTrackList();
-  updatePitchRange();
-  updateCanvasSize();
   renderCanvas();
   persistWebviewState();
   if (sequencer) {
@@ -1624,17 +1623,9 @@ function zoomView(
 }
 
 function updatePitchRange(): void {
-  const audibleTrackIds = getAudibleTrackIds(tracks);
-  const pitches = tracks
-    .filter((track) => audibleTrackIds.has(track.id))
-    .flatMap((track) => track.notes.map((note) => note.midi));
-  if (pitches.length === 0) {
-    minPitch = 21;
-    maxPitch = 108;
-    return;
-  }
-  minPitch = clamp(Math.min(...pitches) - 1, 0, 127);
-  maxPitch = clamp(Math.max(...pitches) + 1, 0, 127);
+  const range = getMidiPitchRange(tracks);
+  minPitch = range.min;
+  maxPitch = range.max;
 }
 
 function renderAll(): void {

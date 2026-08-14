@@ -33,6 +33,7 @@ short sound. MIDI RealPlayer keeps playback and visualization synchronized:
 - Original track names and multiple channels from combined MIDI tracks
 - Per-track Mute, multi-track Solo, and volume controls up to +6 dB, remembered
   for each MIDI file
+- Stable piano-roll framing when tracks are muted or soloed
 - Per-track SoundFont preset picker with the original MIDI program always one
   click away
 - Click-to-seek, transport scrubbing, horizontal pan, and pointer-based zoom
