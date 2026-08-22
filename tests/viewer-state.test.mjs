@@ -38,6 +38,7 @@ test("viewer state migrates the previous gains-only format", () => {
     solo: false,
     gain: 0.4
   });
+  assert.equal(state.viewMode, undefined);
 });
 
 test("viewer state serializes mute, solo, and gain together", () => {

@@ -450,10 +450,13 @@ select:focus-visible {
   height: 1.5rem;
   min-height: 1.5rem;
   padding: 0;
-  border: 1.5px solid var(--border);
+  border: 1.5px solid var(--vscode-button-border, var(--border));
   border-radius: 0;
-  background: var(--surface-control);
-  color: rgba(242, 245, 248, 0.76);
+  background: var(
+    --vscode-button-secondaryBackground,
+    var(--surface-control)
+  );
+  color: var(--vscode-button-secondaryForeground, var(--text));
   cursor: pointer;
   font-size: 0.6875rem;
   font-weight: 800;
@@ -462,20 +465,24 @@ select:focus-visible {
 }
 
 .track-mix-button:hover {
-  border-color: rgba(242, 245, 248, 0.68);
-  color: var(--brand-on-accent);
+  border-color: var(--focus);
+  background: var(
+    --vscode-button-secondaryHoverBackground,
+    var(--surface-hover)
+  );
+  color: var(--vscode-button-secondaryForeground, var(--text));
 }
 
 .track-mute[aria-pressed="true"] {
   border-color: rgb(214, 86, 69);
   background: rgb(214, 86, 69);
-  color: var(--brand-on-accent);
+  color: rgb(5, 8, 12);
 }
 
 .track-solo[aria-pressed="true"] {
   border-color: var(--track-border);
   background: var(--track-color);
-  color: var(--brand-on-accent);
+  color: rgb(5, 8, 12);
 }
 
 .track-row[data-solo="true"] .track-cover::after {

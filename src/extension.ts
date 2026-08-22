@@ -11,6 +11,7 @@ const VIEW_TYPE = "midiRealPlayer.viewer";
 const SOUND_FONT_SETTING = "soundFontPath";
 const BUNDLED_SOUND_FONT = "GeneralUser-GS.sf2";
 const VIEWER_STATE_PREFIX = "midiRealPlayer.viewerState:";
+const VIEW_MODE_PREFERENCE = "midiRealPlayer.viewMode";
 
 type ViewerState = {
   presetDefaultsVersion?: number;
@@ -76,6 +77,7 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
       async (message: {
         type?: string;
         state?: ViewerState;
+        viewMode?: ViewerState["viewMode"];
         suggestedName?: string;
         exportId?: string;
         chunkIndex?: number;
@@ -87,9 +89,15 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
         } else if (message.type === "resetSoundFont") {
           await this.resetSoundFont(panel, document.uri);
         } else if (message.type === "persistViewerState" && message.state) {
+          const { viewMode: _viewMode, ...documentState } = message.state;
           await this.context.workspaceState.update(
             this.getViewerStateKey(document.uri),
-            message.state
+            documentState
+          );
+        } else if (message.type === "persistViewMode" && message.viewMode) {
+          await this.context.globalState.update(
+            VIEW_MODE_PREFERENCE,
+            message.viewMode
           );
         } else if (message.type === "beginAudioExport") {
           await this.beginAudioExport(
@@ -424,10 +432,17 @@ class MidiEditorProvider implements vscode.CustomReadonlyEditorProvider<MidiDocu
     const soundFontLabel = configuredSoundFont
       ? path.basename(soundFont.fsPath)
       : "Default";
-    const viewerState = this.context.workspaceState.get<ViewerState>(
+    const documentViewerState = this.context.workspaceState.get<ViewerState>(
       this.getViewerStateKey(document.uri),
       {}
     );
+    const preferredViewMode = this.context.globalState.get<
+      ViewerState["viewMode"]
+    >(VIEW_MODE_PREFERENCE);
+    const viewerState: ViewerState = {
+      ...documentViewerState,
+      ...(preferredViewMode ? { viewMode: preferredViewMode } : {})
+    };
 
     return `<!doctype html>
 <html lang="en">

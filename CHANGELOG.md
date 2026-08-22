@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.3
+
+- Prevent playback from jumping backward when Mute or Solo changes rebuild the
+  audible MIDI sequence during playback.
+- Keep the latest Play/Pause intent and exact transport position across rapid,
+  overlapping Mute and Solo changes.
+- Avoid reloading the playback engine when Solo changes only the button state
+  and leaves the effective audible-track set unchanged.
+- Make Mute and Solo mutually exclusive on each track.
+- Keep the transport clock running when every track is muted by silencing the
+  engine channels instead of loading an empty MIDI sequence.
+- Remember the selected Roll or Tracks view across different MIDI files and
+  VS Code workspaces.
+
 ## 0.2.2
 
 - Keep the piano-roll pitch range and canvas height fixed when muting or

@@ -76,7 +76,9 @@ export function normalizeViewerState(
         ? candidate.followPlayhead
         : undefined,
     viewMode:
-      candidate.viewMode === "arrangement" ? "arrangement" : "piano-roll",
+      candidate.viewMode === "arrangement" || candidate.viewMode === "piano-roll"
+        ? candidate.viewMode
+        : undefined,
     arrangementTrackHeight: clampNumber(
       candidate.arrangementTrackHeight,
       52,

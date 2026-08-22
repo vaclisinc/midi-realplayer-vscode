@@ -45,8 +45,12 @@ import {
 import { MAX_TRACK_GAIN, updateTrackGain } from "./track-mixer";
 import {
   getAudibleTrackIds,
+  getEngineTrackIds,
   hasSoloedTracks,
-  isTrackAudible
+  haveSameTrackIds,
+  isTrackAudible,
+  toggleTrackMute,
+  toggleTrackSolo
 } from "./track-audibility";
 import {
   chooseRulerSubdivision,
@@ -56,6 +60,7 @@ import {
   resumeTransport,
   seekTransport
 } from "./transport-clock";
+import { PlaybackCoordinator } from "./playback-coordinator";
 import {
   DEFAULT_ARRANGEMENT_TRACK_HEIGHT,
   DEFAULT_PIANO_ROLL_ROW_HEIGHT,
@@ -104,7 +109,7 @@ let soundFontIsCustom = body.dataset.soundFontCustom === "true";
 
 let midiDocument: CanonicalMidiDocument;
 let tracks: TrackModel[] = [];
-let currentTime = 0;
+const playback = new PlaybackCoordinator();
 let viewStart = 0;
 let viewEnd = 1;
 let minPitch = 21;
@@ -116,11 +121,10 @@ let audioContext: AudioContext | undefined;
 let synthesizer: WorkletSynthesizer | undefined;
 let sequencer: Sequencer | undefined;
 let rebuildQueue = Promise.resolve();
-let pendingEngineTime = 0;
-let engineSeekPending = false;
 let animationFrame = 0;
 let followPlayhead = savedViewerState.followPlayhead ?? true;
-let viewMode: ViewerMode = savedViewerState.viewMode ?? "piano-roll";
+let viewMode: ViewerMode =
+  extensionViewerState.viewMode ?? savedViewerState.viewMode ?? "piano-roll";
 let arrangementTrackHeight =
   savedViewerState.arrangementTrackHeight ??
   DEFAULT_ARRANGEMENT_TRACK_HEIGHT;
@@ -195,12 +199,13 @@ async function initialize(): Promise<void> {
 function createTrackModels(): void {
   tracks = midiDocument.tracks.map((track, visualIndex): TrackModel => {
       const savedTrack = savedViewerState.tracks?.[track.id];
+      const solo = savedTrack?.solo ?? false;
       return {
         ...track,
         presetFallback: false,
         presetOverride: getInitialTrackPreset(track, savedTrack?.presetOverride),
-        enabled: savedTrack?.enabled ?? true,
-        solo: savedTrack?.solo ?? false,
+        enabled: solo || (savedTrack?.enabled ?? true),
+        solo,
         gain: clamp(
           savedTrack?.gain ?? 1,
           0,
@@ -527,7 +532,7 @@ function bindApplication(): void {
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
       seekTo(
-        currentTime +
+        playback.currentTime +
           (event.key === "ArrowLeft" ? -1 : 1) *
             (event.shiftKey ? 5 : 0.1)
       );
@@ -694,8 +699,9 @@ function renderTrackList(): void {
       if (!track) {
         return;
       }
-      track.enabled = !track.enabled;
-      applyTrackAudibilityChange();
+      const previousAudibleTrackIds = getAudibleTrackIds(tracks);
+      toggleTrackMute(track);
+      applyTrackAudibilityChange(previousAudibleTrackIds);
     });
   });
 
@@ -708,8 +714,9 @@ function renderTrackList(): void {
       if (!track) {
         return;
       }
-      track.solo = !track.solo;
-      applyTrackAudibilityChange();
+      const previousAudibleTrackIds = getAudibleTrackIds(tracks);
+      toggleTrackSolo(track);
+      applyTrackAudibilityChange(previousAudibleTrackIds);
     });
   });
 
@@ -774,12 +781,22 @@ function handleTrackPresetChange(event: Event): void {
   window.setTimeout(hideStatus, 2200);
 }
 
-function applyTrackAudibilityChange(): void {
+function applyTrackAudibilityChange(
+  previousAudibleTrackIds: ReadonlySet<string>
+): void {
   renderTrackList();
   renderCanvas();
   persistWebviewState();
-  if (sequencer) {
+  const audibleTrackIds = getAudibleTrackIds(tracks);
+  if (audibleTrackIds.size === 0) {
+    synthesizer?.stopAll(true);
+    applyAllTrackGainStates();
+    return;
+  }
+  if (sequencer && !haveSameTrackIds(previousAudibleTrackIds, audibleTrackIds)) {
     queueSequenceRebuild();
+  } else {
+    applyAllTrackGainStates();
   }
 }
 
@@ -794,6 +811,11 @@ async function loadSoundFont(uri: string, label: string): Promise<boolean> {
     const soundBank = await response.arrayBuffer();
     loadedSoundBank = soundBank.slice(0);
 
+    const previousEngineTime =
+      playback.playing && sequencer && !sequencer.paused
+        ? sequencer.currentHighResolutionTime
+        : undefined;
+    playback.requestPause(previousEngineTime, midiDocument.duration);
     sequencer?.pause();
     synthesizer?.stopAll(true);
     synthesizer?.destroy();
@@ -810,7 +832,15 @@ async function loadSoundFont(uri: string, label: string): Promise<boolean> {
       initialPlaybackRate: 1
     });
     sequencer.eventHandler.addEvent("songEnded", "viewer-ended", () => {
-      currentTime = midiDocument.duration;
+      if (playback.rebuilding) {
+        return;
+      }
+      playback.seek(
+        midiDocument.duration,
+        midiDocument.duration,
+        midiDocument.duration
+      );
+      playback.finish();
       updateTransportButtons();
       updateReadouts();
     });
@@ -1079,16 +1109,23 @@ async function rebuildSequence(resumePreviousState = true): Promise<void> {
   if (!sequencer || !synthesizer) {
     return;
   }
-  const wasPlaying = resumePreviousState && !sequencer.paused;
-  const restoreTime = clamp(
-    resumePreviousState ? sequencer.currentTime : currentTime,
-    0,
-    midiDocument.duration
-  );
+  beginSequenceRebuild(resumePreviousState);
+  if (!resumePreviousState) {
+    playback.requestPause(undefined, midiDocument.duration);
+  }
+  try {
+    await replacePlaybackSequence();
+  } finally {
+    await finishSequenceRebuild();
+  }
+}
 
-  sequencer.pause();
-  synthesizer.stopAll(true);
-  const enabledTrackIds = getAudibleTrackIds(tracks);
+async function replacePlaybackSequence(): Promise<void> {
+  if (!sequencer) {
+    return;
+  }
+  const activeSequencer = sequencer;
+  const enabledTrackIds = getEngineTrackIds(tracks);
   const binary = buildPlaybackMidi(
     midiDocument.original,
     midiDocument.tracks,
@@ -1100,27 +1137,54 @@ async function rebuildSequence(resumePreviousState = true): Promise<void> {
 
   await new Promise<void>((resolve) => {
     const eventId = `viewer-rebuild-${Date.now()}-${Math.random()}`;
-    sequencer!.eventHandler.addEvent(
+    activeSequencer.eventHandler.addEvent(
       "songChange",
       eventId,
       () => {
-        sequencer?.eventHandler.removeEvent("songChange", eventId);
+        activeSequencer.eventHandler.removeEvent("songChange", eventId);
         resolve();
       }
     );
-    sequencer!.loadNewSongList([{ binary, fileName }]);
+    activeSequencer.loadNewSongList([{ binary, fileName }]);
   });
 
   applyAllTrackGainStates();
-  currentTime = restoreTime;
-  pendingEngineTime = restoreTime;
-  engineSeekPending = true;
-  if (wasPlaying) {
-    await audioContext?.resume();
-    resumeTransport(sequencer, restoreTime, true);
-    engineSeekPending = false;
-    chaseActiveNotes(currentTime);
+}
+
+function beginSequenceRebuild(resumePreviousState = true): void {
+  const observedEngineTime =
+    resumePreviousState && playback.playing && sequencer && !sequencer.paused
+      ? sequencer.currentHighResolutionTime
+      : undefined;
+  const firstRebuild = playback.beginRebuild(
+    observedEngineTime,
+    midiDocument.duration
+  );
+  if (firstRebuild) {
+    sequencer?.pause();
+    synthesizer?.stopAll(true);
   }
+  updateTransportButtons();
+}
+
+async function finishSequenceRebuild(): Promise<void> {
+  if (!playback.completeRebuild()) {
+    updateTransportButtons();
+    return;
+  }
+  const activeSequencer = sequencer;
+  const activeAudioContext = audioContext;
+  if (!activeSequencer || !activeAudioContext) {
+    return;
+  }
+  await activeAudioContext.resume();
+  if (playback.rebuilding || !playback.playing || sequencer !== activeSequencer) {
+    updateTransportButtons();
+    return;
+  }
+  resumeTransport(activeSequencer, playback.pendingEngineTime, true);
+  playback.markEngineResumed();
+  chaseActiveNotes(playback.currentTime);
   updateTransportButtons();
 }
 
@@ -1130,7 +1194,7 @@ function applyTrackGainState(track: TrackModel): void {
   }
   synthesizer.midiChannels[track.playbackChannelIndex]?.setSystemParameter(
     "gain",
-    track.gain
+    getAudibleTrackIds(tracks).size === 0 ? 0 : track.gain
   );
 }
 
@@ -1141,8 +1205,15 @@ function applyAllTrackGainStates(): void {
 }
 
 function queueSequenceRebuild(): void {
+  beginSequenceRebuild();
   rebuildQueue = rebuildQueue
-    .then(() => rebuildSequence())
+    .then(async () => {
+      try {
+        await replacePlaybackSequence();
+      } finally {
+        await finishSequenceRebuild();
+      }
+    })
     .catch((error: unknown) => {
       const message =
         error instanceof Error
@@ -1153,7 +1224,7 @@ function queueSequenceRebuild(): void {
 }
 
 async function togglePlayback(): Promise<void> {
-  if (sequencer && !sequencer.paused) {
+  if (playback.playing) {
     pausePlayback();
     return;
   }
@@ -1166,26 +1237,30 @@ async function startPlayback(): Promise<void> {
   }
   const activeSequencer = sequencer;
   const activeAudioContext = audioContext;
-  if (!activeSequencer || !activeAudioContext || !activeSequencer.paused) {
+  if (!activeSequencer || !activeAudioContext) {
     return;
   }
-  if (currentTime >= midiDocument.duration - 0.001) {
+  if (playback.currentTime >= midiDocument.duration - 0.001) {
     seekToStart();
   }
+  playback.requestPlay();
+  updateTransportButtons();
   if (followPlayhead) {
     revealPlayhead();
   }
+  if (playback.rebuilding) {
+    return;
+  }
   await activeAudioContext.resume();
-  const targetTime = clamp(
-    pendingEngineTime,
-    0,
-    midiDocument.duration
-  );
-  const shouldChaseAfterResume = engineSeekPending;
+  if (playback.rebuilding || !playback.playing || sequencer !== activeSequencer) {
+    return;
+  }
+  const targetTime = clamp(playback.pendingEngineTime, 0, midiDocument.duration);
+  const shouldChaseAfterResume = playback.engineSeekPending;
   resumeTransport(activeSequencer, targetTime, shouldChaseAfterResume);
-  engineSeekPending = false;
+  playback.markEngineResumed();
   if (shouldChaseAfterResume) {
-    chaseActiveNotes(currentTime);
+    chaseActiveNotes(playback.currentTime);
   }
   updateTransportButtons();
 }
@@ -1371,18 +1446,21 @@ function setExportingAudio(exporting: boolean): void {
 }
 
 function pausePlayback(): void {
-  if (!sequencer || sequencer.paused) {
+  if (!playback.playing) {
     return;
   }
-  currentTime = sequencer.currentTime;
-  sequencer.pause();
+  const engineTime =
+    !playback.rebuilding && sequencer && !sequencer.paused
+      ? sequencer.currentHighResolutionTime
+      : undefined;
+  playback.requestPause(engineTime, midiDocument.duration);
+  sequencer?.pause();
   synthesizer?.stopAll(false);
-  pendingEngineTime = currentTime;
-  engineSeekPending = false;
   updateTransportButtons();
 }
 
 function stop(): void {
+  playback.requestPause(undefined, midiDocument.duration);
   sequencer?.pause();
   synthesizer?.stopAll(true);
   seekToStart();
@@ -1401,13 +1479,17 @@ function seekToStart(): void {
 }
 
 function seekTo(time: number, engineTime = time): void {
-  currentTime = clamp(time, 0, midiDocument.duration);
-  pendingEngineTime = clamp(engineTime, 0, midiDocument.duration);
-  if (sequencer) {
-    engineSeekPending = seekTransport(sequencer, pendingEngineTime);
-    if (!sequencer.paused) {
-      chaseActiveNotes(currentTime);
+  playback.seek(time, engineTime, midiDocument.duration);
+  if (sequencer && !playback.rebuilding) {
+    playback.engineSeekPending = seekTransport(
+      sequencer,
+      playback.pendingEngineTime
+    );
+    if (playback.playing && !sequencer.paused) {
+      chaseActiveNotes(playback.currentTime);
     }
+  } else {
+    playback.engineSeekPending = true;
   }
   updateReadouts();
   renderCanvas();
@@ -1427,15 +1509,14 @@ function chaseActiveNotes(
 }
 
 function updateFrame(): void {
-  if (sequencer && !sequencer.paused) {
-    currentTime = clamp(
+  if (playback.playing && sequencer && !sequencer.paused) {
+    playback.updateFromEngine(
       sequencer.currentHighResolutionTime,
-      0,
       midiDocument.duration
     );
     if (followPlayhead) {
       const nextView = followPlaybackView(
-        currentTime,
+        playback.currentTime,
         viewStart,
         viewEnd,
         midiDocument.duration
@@ -1450,7 +1531,7 @@ function updateFrame(): void {
 }
 
 function updateTransportButtons(): void {
-  const playing = sequencer ? !sequencer.paused : false;
+  const playing = playback.playing;
   playIcon.toggleAttribute("hidden", playing);
   pauseIcon.toggleAttribute("hidden", !playing);
   playButton.setAttribute("aria-label", playing ? "Pause" : "Play");
@@ -1461,7 +1542,7 @@ function toggleFollowPlayhead(): void {
   followPlayhead = !followPlayhead;
   persistWebviewState();
   updateFollowPlayheadButton();
-  if (followPlayhead && sequencer && !sequencer.paused) {
+  if (followPlayhead && playback.playing) {
     revealPlayhead();
   }
 }
@@ -1503,6 +1584,7 @@ function setViewMode(nextMode: ViewerMode): void {
   updateCanvasSize();
   renderCanvas();
   persistWebviewState();
+  vscode.postMessage({ type: "persistViewMode", viewMode });
 }
 
 function updateViewMode(): void {
@@ -1581,7 +1663,7 @@ function getCanvasHeaderHeight(): number {
 
 function revealPlayhead(): void {
   const nextView = followPlaybackView(
-    currentTime,
+    playback.currentTime,
     viewStart,
     viewEnd,
     midiDocument.duration
@@ -1592,14 +1674,14 @@ function revealPlayhead(): void {
 }
 
 function updateReadouts(): void {
-  scrubber.value = String(currentTime);
-  timeReadout.textContent = formatTime(currentTime);
-  positionReadout.textContent = formatMusicalPosition(currentTime);
+  scrubber.value = String(playback.currentTime);
+  timeReadout.textContent = formatTime(playback.currentTime);
+  positionReadout.textContent = formatMusicalPosition(playback.currentTime);
 }
 
 function zoomView(
   factor: number,
-  anchorTime = currentTime,
+  anchorTime = playback.currentTime,
   anchorRatio?: number
 ): void {
   const duration = midiDocument.duration;
@@ -1780,7 +1862,7 @@ function renderCanvas(): void {
 
   const playheadX =
     keyboardWidth +
-    ((currentTime - viewStart) / windowDuration) * gridWidth;
+    ((playback.currentTime - viewStart) / windowDuration) * gridWidth;
   if (playheadX >= keyboardWidth && playheadX <= width) {
     context.strokeStyle = playhead;
     context.lineWidth = 1.5;
@@ -1908,7 +1990,8 @@ function renderArrangementCanvas(
     interfaceFont
   });
 
-  const playheadX = ((currentTime - viewStart) / windowDuration) * width;
+  const playheadX =
+    ((playback.currentTime - viewStart) / windowDuration) * width;
   if (playheadX >= 0 && playheadX <= width) {
     context.strokeStyle = playhead;
     context.lineWidth = 1.5;
