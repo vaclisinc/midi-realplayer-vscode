@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.4
+
+- Keep Mute and Solo controls readable on dark instrument cards when Cursor
+  Light or another third-party theme supplies low-contrast button colors.
+- Preserve distinct inactive, hover, active, and high-contrast states without
+  allowing editor theme tokens to override the track-card control surface.
+
 ## 0.2.3
 
 - Prevent playback from jumping backward when Mute or Solo changes rebuild the

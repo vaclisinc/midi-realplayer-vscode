@@ -48,6 +48,11 @@
   --piano-key-dark: oklch(22.5% 0.013 255);
   --piano-key-border: oklch(42% 0.012 255);
   --piano-key-label: oklch(38% 0.012 255);
+  /* Track cards always sit on dark photography, independent of the editor theme. */
+  --track-control-background: rgba(5, 8, 12, 0.78);
+  --track-control-hover-background: rgba(35, 42, 52, 0.94);
+  --track-control-border: rgba(242, 245, 248, 0.56);
+  --track-control-foreground: rgb(242, 245, 248);
   --interface-font: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   font-family: var(--interface-font);
   font-size: var(--vscode-font-size, 13px);
@@ -450,13 +455,10 @@ select:focus-visible {
   height: 1.5rem;
   min-height: 1.5rem;
   padding: 0;
-  border: 1.5px solid var(--vscode-button-border, var(--border));
+  border: 1.5px solid var(--track-control-border);
   border-radius: 0;
-  background: var(
-    --vscode-button-secondaryBackground,
-    var(--surface-control)
-  );
-  color: var(--vscode-button-secondaryForeground, var(--text));
+  background: var(--track-control-background);
+  color: var(--track-control-foreground);
   cursor: pointer;
   font-size: 0.6875rem;
   font-weight: 800;
@@ -465,12 +467,14 @@ select:focus-visible {
 }
 
 .track-mix-button:hover {
-  border-color: var(--focus);
-  background: var(
-    --vscode-button-secondaryHoverBackground,
-    var(--surface-hover)
-  );
-  color: var(--vscode-button-secondaryForeground, var(--text));
+  border-color: var(--track-control-foreground);
+  background: var(--track-control-hover-background);
+  color: var(--track-control-foreground);
+}
+
+body.vscode-high-contrast .track-mix-button,
+body.vscode-high-contrast-light .track-mix-button {
+  border-color: var(--vscode-contrastBorder, var(--track-control-foreground));
 }
 
 .track-mute[aria-pressed="true"] {
