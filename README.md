@@ -6,6 +6,10 @@ An open-source multi-track MIDI player and visual workspace for VS Code.
 It preserves note duration, velocity, tempo, program changes, and channel
 performance data, then plays them through real SoundFont instruments.
 
+Building music research demos or listening tests? Use the
+[MIDI RealPlayer npm package](https://github.com/vaclisinc/midi-realplayer)
+to embed the player in your pages.
+
 [![Install from VS Marketplace](https://img.shields.io/badge/VS%20Marketplace-Install-007ACC?logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=vaclis.midi-realplayer)
 [![GitHub release](https://img.shields.io/github/v/release/vaclisinc/midi-realplayer-vscode?label=Release)](https://github.com/vaclisinc/midi-realplayer-vscode/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f2c94c.svg)](LICENSE)
