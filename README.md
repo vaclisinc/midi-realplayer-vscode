@@ -16,38 +16,19 @@ to embed the player in your pages.
 
 [![Watch MIDI RealPlayer in action](assets/midi-realplayer-demo.gif)](https://www.youtube.com/watch?v=uFnpmIG5CA8)
 
-## Why MIDI RealPlayer?
+## Features
 
-Many MIDI previewers draw the right notes but play every event as the same
-short sound. MIDI RealPlayer keeps playback and visualization synchronized:
+Open a MIDI file in VS Code to listen, inspect the notes, and try a different
+mix. Playback follows the file's note lengths, dynamics, tempo changes, and
+controllers, with a SoundFont included so you can start listening right away.
 
-- Notes play for their encoded duration and velocity.
-- General MIDI programs and drums use SoundFont instruments, with per-track
-  preset selection when you want a different sound.
-- Track Mute, Solo, and volume controls affect both what you see and hear.
-- Piano Roll and Tracks views reveal both note detail and song structure.
-- Seeking into a sustained note reconstructs the active sound correctly.
-- Tempo, sustain, pitch bend, controllers, banks, and program changes survive
-  playback.
-- The current mix can be rendered directly to WAV without FFmpeg.
+- Switch between a piano roll and a track overview to explore the arrangement.
+- Mute or solo tracks, adjust their volume, and choose different instruments.
+- Seek, zoom, and follow playback as you inspect a passage.
+- Use the bundled sounds or load your own SoundFont, then export your mix to WAV.
 
-## Highlights
-
-- Instrument-colored Piano Roll and DAW-style Tracks views for `.mid` and `.midi`
-- Original track names and multiple channels from combined MIDI tracks
-- Per-track Mute, multi-track Solo, and volume controls up to +6 dB, remembered
-  for each MIDI file
-- Stable piano-roll framing when tracks are muted or soloed
-- Per-track SoundFont preset picker with the original MIDI program always one
-  click away
-- Click-to-seek, transport scrubbing, horizontal pan, and pointer-based zoom
-- Adjustable pitch-row and arrangement-lane heights
-- Adaptive musical ruler with bar, beat, and subdivision marks
-- Optional playhead following with Fit-to-song view
-- Bundled GeneralUser GS SoundFont, ready on first launch
-- Custom `.sf2`, `.sf3`, and `.dls` SoundFont support
-- Offline WAV export of the enabled tracks and current volume mix
-- Source-safe workflow that never modifies the MIDI file
+Your MIDI file stays unchanged; mix and instrument choices are remembered for
+next time.
 
 ## Install
 
