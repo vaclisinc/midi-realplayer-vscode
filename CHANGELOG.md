@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.5
+
+- Refresh all 16 instrument-family illustrations with modern artwork.
+
 ## 0.2.4
 
 - Keep Mute and Solo controls readable on dark instrument cards when Cursor
